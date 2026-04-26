@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v3
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Run tests
+      run: |
+        uv run pytest tests/unit/ -v
+
+    - name: Build package
+      run: uv build
+
+    - name: Check distribution
+      run: |
+        uv run twine check dist/*
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+
+
+
+
+
+
+  create-release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+    - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download distributions
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+    - name: Extract release notes
+      id: extract-notes
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "Release $VERSION" > release_notes.txt
+        echo "" >> release_notes.txt
+        echo "Automated release created from tag $GITHUB_REF_NAME" >> release_notes.txt
+        echo "" >> release_notes.txt
+        echo "See GitHub releases for detailed changes and updates." >> release_notes.txt
+
+    - name: Create Release
+      uses: ncipollo/release-action@v1
+      with:
+        artifacts: "dist/*"
+        bodyFile: "release_notes.txt"
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        token: ${{ secrets.GITHUB_TOKEN }}
