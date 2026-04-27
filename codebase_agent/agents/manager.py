@@ -12,6 +12,8 @@ from ..config.configuration import ConfigurationManager
 from ..tools.shell_tool import ShellTool
 from .code_analyzer import CodeAnalyzer
 from .task_specialist import TaskSpecialist
+from ..utils.graphify_cli import GraphifyCLI
+from ..tools.graphify_tool import GraphifyTool
 
 
 class AgentManager:
@@ -37,6 +39,10 @@ class AgentManager:
         # Initialize agents
         self.code_analyzer: CodeAnalyzer | None = None
         self.task_specialist: TaskSpecialist | None = None
+        
+        # Graphify components
+        self.graphify_cli: GraphifyCLI | None = None
+        self.graphify_tool: GraphifyTool | None = None
 
     def initialize_agents(self) -> None:
         """Initialize all specialized agents with their configurations."""
@@ -47,10 +53,14 @@ class AgentManager:
             # but this will be overridden by the actual codebase path during analysis)
             shell_tool = ShellTool(".")
 
-            self.code_analyzer = CodeAnalyzer(model_client, shell_tool)
+            # Initialize Graphify (using current directory as default)
+            self.graphify_cli = GraphifyCLI(".")
+            self.graphify_tool = GraphifyTool(".")
+
+            self.code_analyzer = CodeAnalyzer(model_client, shell_tool, self.graphify_tool)
             self.task_specialist = TaskSpecialist(model_client)
 
-            self.logger.info("Successfully initialized all agents")
+            self.logger.info("Successfully initialized all agents with Graphify support")
 
         except Exception as e:
             self.logger.error(f"Failed to initialize agents: {e}")
@@ -98,6 +108,33 @@ class AgentManager:
         specialist_feedback = None
         review_count = 0
 
+        # Run Graphify indexing before starting review cycles
+        self.logger.info("Running Graphify indexing...")
+        initial_findings = []
+        if self.graphify_cli:
+            # Re-initialize CLI/Tool with the actual codebase path
+            self.graphify_cli = GraphifyCLI(codebase_path)
+            self.graphify_tool = GraphifyTool(codebase_path)
+            # Update analyzer's tools
+            if self.code_analyzer:
+                self.code_analyzer.graphify_tool = self.graphify_tool
+                # CRITICAL: Also update the ShellTool's working directory to the target codebase!
+                if hasattr(self.code_analyzer, 'shell_tool'):
+                    from pathlib import Path
+                    self.code_analyzer.shell_tool.working_directory = Path(codebase_path).resolve()
+                    self.logger.info(f"Synchronized ShellTool working directory to: {codebase_path}")
+            
+            if self.graphify_cli.index():
+                self.logger.info("Graphify indexing completed successfully")
+                report = self.graphify_cli.read_report()
+                if report:
+                    self.logger.info(f"Loaded graph report ({len(report)} bytes)")
+                    initial_findings.append(f"📊 GRAPH ARCHITECTURE REPORT (Structural Analysis):\n{report[:2000]}...")
+                else:
+                    self.logger.warning("Graphify indexing succeeded but report file not found")
+            else:
+                self.logger.warning("Graphify indexing failed - proceeding with standard analysis")
+        
         while review_count < self.max_specialist_reviews:
             review_count += 1
             statistics["total_review_cycles"] = review_count
@@ -109,8 +146,11 @@ class AgentManager:
             # Code Analyzer analyzes the codebase
             self.logger.info("Code Analyzer starting analysis...")
             analysis_result = self.code_analyzer.analyze_codebase(
-                query, codebase_path, specialist_feedback
+                query, codebase_path, specialist_feedback, initial_findings
             )
+            
+            # Clear initial findings after first cycle so they don't keep appending
+            initial_findings = []
 
             # Task Specialist reviews the analysis
             self.logger.info("Task Specialist reviewing analysis...")

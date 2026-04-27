@@ -7,7 +7,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from graphify.security import safe_fetch, safe_fetch_text, validate_url
+from .security import safe_fetch, safe_fetch_text, validate_url
 
 
 def _yaml_str(s: str) -> str:
@@ -208,7 +208,7 @@ def ingest(url: str, target_dir: Path, author: str | None = None, contributor: s
             return out
 
         if url_type == "youtube":
-            from graphify.transcribe import download_audio
+            from .transcribe import download_audio
             out = download_audio(url, target_dir)
             print(f"Downloaded audio: {out.name}")
             return out

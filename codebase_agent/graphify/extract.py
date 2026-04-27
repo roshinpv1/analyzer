@@ -3391,7 +3391,7 @@ def collect_files(target: Path, *, follow_symlinks: bool = False, root: Path | N
         ".lua", ".toc", ".zig", ".ps1",
         ".m", ".mm",
     }
-    from graphify.detect import _load_graphifyignore, _is_ignored
+    from .detect import _load_graphifyignore, _is_ignored
     ignore_root = root if root is not None else target
     patterns = _load_graphifyignore(ignore_root)
 

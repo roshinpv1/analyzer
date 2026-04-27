@@ -74,7 +74,7 @@ if not changed:
 print(f'[graphify hook] {len(changed)} file(s) changed - rebuilding graph...')
 
 try:
-    from graphify.watch import _rebuild_code
+    from .watch import _rebuild_code
     _rebuild_code(Path('.'))
 except Exception as exc:
     print(f'[graphify hook] Rebuild failed: {exc}')
@@ -113,7 +113,7 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 """ + _PYTHON_DETECT + """
 echo "[graphify] Branch switched - rebuilding knowledge graph (code files)..."
 $GRAPHIFY_PYTHON -c "
-from graphify.watch import _rebuild_code
+from .watch import _rebuild_code
 from pathlib import Path
 import sys
 try:

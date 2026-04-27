@@ -1,0 +1,18 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "test.py",
+      "file_type": "code",
+      "source_file": "test_dir/test.py",
+      "source_location": "L1",
+      "id": "test_py",
+      "community": 0,
+      "norm_label": "test.py"
+    }
+  ],
+  "links": [],
+  "hyperedges": []
+}

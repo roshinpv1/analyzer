@@ -34,16 +34,18 @@ class CodeAnalyzer:
     self-assessment of analysis completeness.
     """
 
-    def __init__(self, config: dict, shell_tool):
+    def __init__(self, config: dict, shell_tool, graphify_tool=None):
         """
         Initialize the Code Analyzer agent.
 
         Args:
             config: Configuration dict containing model settings
             shell_tool: Shell execution tool for codebase exploration
+            graphify_tool: Tool for interacting with the knowledge graph
         """
         self.config = config
         self.shell_tool = shell_tool
+        self.graphify_tool = graphify_tool
         self.logger = logging.getLogger(__name__)
 
         # Initialize AutoGen agent with shell tool capability
@@ -141,16 +143,17 @@ Maintain a "key_findings" list that serves as shared memory across iterations:
 3. 🔄 UPDATE or REFINE existing findings with new insights
 4. 🗑️ REMOVE findings that are no longer relevant
 
-📤 RESPONSE FORMAT:
-You MUST respond in valid JSON format with these exact fields:
-{
-    "need_shell_execution": true/false,
-    "shell_commands": ["command1", "command2", ...],
-    "key_findings": ["Finding 1", "Finding 2", "..."],
-    "current_analysis": "Your analysis of this iteration",
-    "confidence_level": 1-10,
-    "next_focus_areas": "What you plan to focus on next"
-}
+        RESPONSE FORMAT: You MUST respond in valid JSON format with these exact fields:
+        {
+            "need_shell_execution": true/false,
+            "shell_commands": ["command1", "command2", ...],
+            "need_graph_query": true/false,
+            "graph_queries": [{"tool": "query_graph", "arguments": {"question": "..."}}, ...],
+            "key_findings": ["Finding 1", "Finding 2", "..."],
+            "current_analysis": "Your analysis of this iteration",
+            "confidence_level": 1-10,
+            "next_focus_areas": "What you plan to focus on next"
+        }
 
 🎯 ANALYSIS PROCESS:
 1. **First iteration**: ALWAYS set need_shell_execution: true with discovery commands
@@ -163,17 +166,21 @@ You MUST respond in valid JSON format with these exact fields:
 💡 FIRST ITERATION STARTER COMMANDS:
 - `["ls -la", "find . -type f | head -20", "file $(find . -type f | head -5)"]`
 
-🎯 YOUR GOAL: UNDERSTANDING through discovery, not checklist completion.
-Adapt your reading strategy based on:
-- File size and complexity
-- The specific question being asked
-- The type of content (code, config, docs, etc.)
-- What the codebase reveals to you
+Always explain your findings with specific examples, line numbers, and evidence from the code.
 
-Always explain your findings with specific examples, line numbers, and evidence from the code."""
+🚀 GRAPH-INFORMED ANALYSIS (Graphify v5):
+When a knowledge graph is available, use it to understand architectural patterns before searching raw files.
+- GOD NODES: Identify the project's central abstractions and high-level logic.
+- COMMUNITIES: Understand how files are grouped into logical modules.
+- PATHS: Use graph tools to trace how data or execution flows between distant components.
+- RELATIONSHIPS: Check 'inherits', 'imports', and 'calls' edges to build a mental map of the system.
+
+Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
+"""
 
     def analyze_codebase(
-        self, query: str, codebase_path: str, specialist_feedback: str | None = None
+        self, query: str, codebase_path: str, specialist_feedback: str | None = None,
+        initial_findings: list[str] | None = None
     ) -> str:
         """
         Analyze codebase with multi-round self-iteration for progressive analysis.
@@ -182,6 +189,7 @@ Always explain your findings with specific examples, line numbers, and evidence 
             query: User's analysis request
             codebase_path: Path to the codebase to analyze
             specialist_feedback: Optional feedback from Task Specialist to guide analysis focus
+            initial_findings: Optional pre-discovered findings (e.g. from Graphify report)
 
         Returns:
             Comprehensive analysis result
@@ -191,7 +199,7 @@ Always explain your findings with specific examples, line numbers, and evidence 
         current_iteration = 0
         analysis_context = []
         shell_execution_history = []
-        shared_key_findings = []  # Collaborative knowledge base
+        shared_key_findings = initial_findings or []  # Collaborative knowledge base
         convergence_indicators = {
             "sufficient_code_coverage": False,
             "question_answered": False,
@@ -271,12 +279,27 @@ Always explain your findings with specific examples, line numbers, and evidence 
                     }
                 )
 
+            # Execute graph queries if needed
+            graph_results = []
+            if self.graphify_tool and llm_decision.get("need_graph_query", False):
+                self.logger.info(f"Executing {len(llm_decision.get('graph_queries', []))} graph queries")
+                for query_req in llm_decision.get("graph_queries", []):
+                    tool_name = query_req.get("tool")
+                    args = query_req.get("arguments", {})
+                    output = self.graphify_tool.execute_tool(tool_name, args)
+                    graph_results.append({
+                        "tool": tool_name,
+                        "arguments": args,
+                        "output": output
+                    })
+
             # Store analysis step
             analysis_context.append(
                 {
                     "iteration": current_iteration,
                     "llm_decision": llm_decision,
                     "shell_results": shell_results,
+                    "graph_results": graph_results,
                     "timestamp": self._get_timestamp(),
                 }
             )
@@ -591,6 +614,14 @@ Always explain your findings with specific examples, line numbers, and evidence 
             for ctx in context[-1:]:  # Show only last context
                 llm_decision = ctx.get("llm_decision", {})
                 base_prompt += f"Previous iteration {ctx['iteration']} focused on: {llm_decision.get('next_focus_areas', 'N/A')}\n"
+            
+            # Add recent graph results if any
+            if ctx.get("graph_results"):
+                base_prompt += "\n📊 RECENT GRAPH QUERY RESULTS:\n"
+                for g_res in ctx["graph_results"]:
+                    base_prompt += f"Tool: {g_res['tool']}({g_res['arguments']})\n"
+                    output_summary = g_res['output'][:500] + "..." if len(g_res['output']) > 500 else g_res['output']
+                    base_prompt += f"Result: {output_summary}\n"
                 base_prompt += f"Previous confidence: {llm_decision.get('confidence_level', 'N/A')}\n"
 
         # Add current iteration context and convergence status
@@ -694,11 +725,17 @@ Always explain your findings with specific examples, line numbers, and evidence 
             llm_decision = ctx.get("llm_decision", {})
 
             synthesis += f"\n--- Iteration {iteration} ---\n"
-            synthesis += f"Commands executed: {len(shell_results)}\n"
+            synthesis += f"Actions executed: {len(shell_results) + len(ctx.get('graph_results', []))}\n"
+            
             if shell_results:
                 for result in shell_results:
                     status = "✓" if result["success"] else "✗"
                     synthesis += f"  {status} {result['command']}\n"
+            
+            if ctx.get("graph_results"):
+                for g_res in ctx["graph_results"]:
+                    synthesis += f"  📊 Graph Query: {g_res['tool']}({g_res['arguments']})\n"
+
             synthesis += f"Confidence: {llm_decision.get('confidence_level', 'N/A')}\n"
 
             # Show knowledge base growth

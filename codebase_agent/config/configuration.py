@@ -82,10 +82,45 @@ class ConfigurationManager:
             project_root: Path to project root directory. If None, uses current directory.
         """
         self.project_root = project_root or Path.cwd()
-        self.env_file = self.project_root / ".env"
+        self.env_file = self._find_env_file()
         self._config: dict[str, str] = {}
         self._is_loaded = False
         self.logger = logging.getLogger(__name__)
+
+    def _find_env_file(self) -> Path:
+        """Find the most appropriate .env file.
+
+        Searches in:
+        1. The provided project_root
+        2. The current working directory
+        3. The package root directory (fallback)
+
+        Returns:
+            Path to the discovered .env file or default path in project_root.
+        """
+        # 1. Try project root
+        env_in_project = self.project_root / ".env"
+        if env_in_project.exists():
+            return env_in_project
+
+        # 2. Try current working directory
+        cwd_env = Path.cwd() / ".env"
+        if cwd_env.exists():
+            return cwd_env
+
+        # 3. Try package root
+        try:
+            import codebase_agent
+
+            package_root = Path(codebase_agent.__file__).parent.parent
+            package_env = package_root / ".env"
+            if package_env.exists():
+                return package_env
+        except ImportError:
+            pass
+
+        # Fallback to default path
+        return env_in_project
 
     def load_environment(self) -> None:
         """Load environment variables from .env file and system environment.

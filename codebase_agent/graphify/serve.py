@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 import networkx as nx
 from networkx.readwrite import json_graph
-from graphify.security import sanitize_label
+from .security import sanitize_label
 
 
 def _load_graph(graph_path: str) -> nx.Graph:

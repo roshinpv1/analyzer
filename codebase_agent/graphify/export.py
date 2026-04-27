@@ -8,8 +8,8 @@ from collections import Counter
 from pathlib import Path
 import networkx as nx
 from networkx.readwrite import json_graph
-from graphify.security import sanitize_label
-from graphify.analyze import _node_community_map
+from .security import sanitize_label
+from .analyze import _node_community_map
 
 def _strip_diacritics(text: str) -> str:
     import unicodedata
