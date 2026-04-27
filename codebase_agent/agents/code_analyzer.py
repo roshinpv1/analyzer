@@ -34,7 +34,7 @@ class CodeAnalyzer:
     self-assessment of analysis completeness.
     """
 
-    def __init__(self, config: dict, shell_tool, graphify_tool=None):
+    def __init__(self, config: dict, shell_tool, graphify_tool=None, playbook_instructions=None):
         """
         Initialize the Code Analyzer agent.
 
@@ -42,10 +42,12 @@ class CodeAnalyzer:
             config: Configuration dict containing model settings
             shell_tool: Shell execution tool for codebase exploration
             graphify_tool: Tool for interacting with the knowledge graph
+            playbook_instructions: Optional strategic instructions from a playbook
         """
         self.config = config
         self.shell_tool = shell_tool
         self.graphify_tool = graphify_tool
+        self.playbook_instructions = playbook_instructions
         self.logger = logging.getLogger(__name__)
 
         # Initialize AutoGen agent with shell tool capability
@@ -66,8 +68,15 @@ class CodeAnalyzer:
 
     def _get_system_message(self) -> str:
         """Get the system message for the Code Analyzer agent."""
-        return r"""You are a Code Analyzer, a technical expert responsible for comprehensive codebase analysis.
+        base_message = r"""You are a Code Analyzer, a technical expert responsible for comprehensive codebase analysis.
+"""
+        
+        if self.playbook_instructions:
+            # Inject playbook instructions early for maximum influence
+            base_message += f"\n\n🚀 STRATEGIC PLAYBOOK GUIDANCE:\n{self.playbook_instructions}\n"
+            base_message += "\nIMPORTANT: The above playbook provides your strategic goal and persona. Integrate these instructions into your technical analysis process.\n"
 
+        base_message += r"""
 CRITICAL: You MUST always start by exploring the codebase with shell commands before providing any analysis.
 
 Your capabilities:
@@ -177,6 +186,8 @@ When a knowledge graph is available, use it to understand architectural patterns
 
 Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
 """
+        
+        return base_message
 
     def analyze_codebase(
         self, query: str, codebase_path: str, specialist_feedback: str | None = None,
@@ -792,7 +803,26 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
                 if focus_areas:
                     synthesis_prompt += f"Focus areas identified: {focus_areas}\n"
 
-            synthesis_prompt += """
+            # If a playbook is active, try to extract its specific output schema
+            custom_schema = None
+            if self.playbook_instructions:
+                # Look for the Output Schema marker in the instructions
+                schema_marker = "### TARGET OUTPUT STRUCTURE"
+                if schema_marker in self.playbook_instructions:
+                    # Extract everything after the marker
+                    custom_schema = self.playbook_instructions.split(schema_marker)[-1].strip()
+
+            if custom_schema:
+                synthesis_prompt += f"""
+            
+            === TARGET OUTPUT SCHEMA ===
+            You MUST format your final response based on this specific schema from the playbook:
+            {custom_schema}
+            
+            Ensure ALL fields required by this schema are populated with evidence found during iterations.
+            """
+            else:
+                synthesis_prompt += """
 
             === SYNTHESIS REQUIREMENTS ===
             Create a comprehensive technical report that:

@@ -6,12 +6,13 @@ Code Analyzer and Task Specialist through a review cycle mechanism.
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from ..config.configuration import ConfigurationManager
 from ..tools.shell_tool import ShellTool
 from .code_analyzer import CodeAnalyzer
 from .task_specialist import TaskSpecialist
+from ..utils.playbook import PlaybookManager, Playbook
 from ..utils.graphify_cli import GraphifyCLI
 from ..tools.graphify_tool import GraphifyTool
 
@@ -44,10 +45,29 @@ class AgentManager:
         self.graphify_cli: GraphifyCLI | None = None
         self.graphify_tool: GraphifyTool | None = None
 
-    def initialize_agents(self) -> None:
-        """Initialize all specialized agents with their configurations."""
+    def initialize_agents(self, playbook_name: Optional[str] = None) -> None:
+        """
+        Initialize the multi-agent system.
+
+        Args:
+            playbook_name: Optional name of a playbook to load for strategic guidance.
+
+        Raises:
+            Exception: If agent initialization fails
+        """
         try:
             model_client = self.config_manager.get_model_client()
+
+            # Handle playbook loading
+            playbook_instructions = None
+            if playbook_name:
+                pm = PlaybookManager()
+                playbook = pm.load_playbook(playbook_name)
+                if playbook:
+                    self.logger.info(f"Loading playbook: {playbook_name}")
+                    playbook_instructions = playbook.sanitize_for_tools(available_tools=["shell", "graphify"])
+                else:
+                    self.logger.warning(f"Playbook '{playbook_name}' not found. Proceeding with default strategy.")
 
             # Create shell tool (we'll use current directory as default,
             # but this will be overridden by the actual codebase path during analysis)
@@ -57,7 +77,7 @@ class AgentManager:
             self.graphify_cli = GraphifyCLI(".")
             self.graphify_tool = GraphifyTool(".")
 
-            self.code_analyzer = CodeAnalyzer(model_client, shell_tool, self.graphify_tool)
+            self.code_analyzer = CodeAnalyzer(model_client, shell_tool, self.graphify_tool, playbook_instructions=playbook_instructions)
             self.task_specialist = TaskSpecialist(model_client)
 
             self.logger.info("Successfully initialized all agents with Graphify support")

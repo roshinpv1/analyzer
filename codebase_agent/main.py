@@ -84,11 +84,18 @@ def cli(log_level: str, console_level: str, logs_dir: str, verbose: bool) -> Non
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help="Working directory for analysis (default: codebase_path)",
 )
+@click.option(
+    "--playbook",
+    "-p",
+    default=None,
+    help="Name of a playbook to use for strategic guidance (e.g., 'design_solution')",
+)
 def analyze(
     codebase_path: str,
     task_description: str,
     output_format: str,
     working_dir: str | None,
+    playbook: str | None,
 ) -> None:
     """Analyze codebase for specific development task.
 
@@ -140,7 +147,7 @@ def analyze(
         # Initialize agent manager
         with console.status("[bold green]Initializing AI agents..."):
             agent_manager = AgentManager(config_manager)
-            agent_manager.initialize_agents()
+            agent_manager.initialize_agents(playbook_name=playbook)
 
         # Perform analysis with progress indication
         console.print("\n[bold green]Starting codebase analysis...[/bold green]")
