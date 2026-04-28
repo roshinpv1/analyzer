@@ -37,7 +37,7 @@ class TaskSpecialist:
 
         # Review tracking
         self.review_count = 0
-        self.max_reviews = 3
+        self.max_reviews = 50
 
         # Initialize AutoGen agent
         self._agent = self._create_autogen_agent()
