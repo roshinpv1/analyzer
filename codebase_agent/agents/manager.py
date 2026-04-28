@@ -9,7 +9,7 @@ import logging
 from typing import Any, Optional
 
 from ..config.configuration import ConfigurationManager
-from ..tools.shell_tool import ShellTool
+from ..tools.file_system_tool import FileSystemTool
 from .code_analyzer import CodeAnalyzer
 from .task_specialist import TaskSpecialist
 from ..utils.playbook import PlaybookManager, Playbook
@@ -55,15 +55,15 @@ class AgentManager:
         try:
             model_client = self.config_manager.get_model_client()
 
-            # Create shell tool (we'll use current directory as default,
+            # Create file system tool (we'll use current directory as default,
             # but this will be overridden by the actual codebase path during analysis)
-            shell_tool = ShellTool(".")
+            file_system_tool = FileSystemTool(".")
 
             # Initialize Graphify (using current directory as default)
             self.graphify_cli = GraphifyCLI(".")
             self.graphify_tool = GraphifyTool(".")
 
-            self.code_analyzer = CodeAnalyzer(model_client, shell_tool, self.graphify_tool)
+            self.code_analyzer = CodeAnalyzer(model_client, file_system_tool, self.graphify_tool)
             self.task_specialist = TaskSpecialist(model_client)
 
             self.logger.info("Successfully initialized all agents with Graphify support")
@@ -116,10 +116,10 @@ class AgentManager:
             
             if self.code_analyzer:
                 self.code_analyzer.graphify_tool = self.graphify_tool
-                if hasattr(self.code_analyzer, 'shell_tool'):
+                if hasattr(self.code_analyzer, 'file_system_tool'):
                     from pathlib import Path
-                    self.code_analyzer.shell_tool.working_directory = Path(codebase_path).resolve()
-                    self.logger.info(f"Synchronized ShellTool working directory to: {codebase_path}")
+                    self.code_analyzer.file_system_tool.working_directory = Path(codebase_path).resolve()
+                    self.logger.info(f"Synchronized FileSystemTool working directory to: {codebase_path}")
             
             if self.graphify_cli.index():
                 self.logger.info("Graphify indexing completed successfully")
@@ -156,11 +156,10 @@ class AgentManager:
             try:
                 # Prepare a fresh CodeAnalyzer instance for this iteration 
                 model_client = self.config_manager.get_model_client()
-                from ..tools.shell_tool import ShellTool
                 from pathlib import Path
-                shell_tool = ShellTool(Path(codebase_path).resolve())
+                file_system_tool = FileSystemTool(str(Path(codebase_path).resolve()))
                 self.code_analyzer = CodeAnalyzer(
-                    model_client, shell_tool, self.graphify_tool, playbook_instructions=playbook_instructions
+                    model_client, file_system_tool, self.graphify_tool, playbook_instructions=playbook_instructions
                 )
                 
                 # Incorporate context from previous playbook into initial findings

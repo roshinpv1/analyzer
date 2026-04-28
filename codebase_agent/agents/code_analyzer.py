@@ -14,7 +14,7 @@ You will maintain a "key_findings" list that serves as a collaborative knowledge
 4. 🗑️ REMOVE findings that are no longer relevant or were incorrect
 
 This shared knowledge base ensures all critical information is preserved across iterations.e implements the Code Analyzer agent responsible for technical analysis
-of codebases using multi-round self-iteration and shell command execution.
+of codebases using multi-round self-iteration and file system operations.
 """
 
 import logging
@@ -26,26 +26,26 @@ from ..utils.autogen_utils import extract_text_from_autogen_response
 
 class CodeAnalyzer:
     """
-    Technical expert agent responsible for codebase analysis using shell commands
+    Technical expert agent responsible for codebase analysis using file system operations
     and iterative exploration.
 
     The Code Analyzer performs multi-round self-iteration to progressively analyze
-    codebases, building knowledge through targeted shell command execution and
+    codebases, building knowledge through targeted file system operations and
     self-assessment of analysis completeness.
     """
 
-    def __init__(self, config: dict, shell_tool, graphify_tool=None, playbook_instructions=None):
+    def __init__(self, config: dict, file_system_tool, graphify_tool=None, playbook_instructions=None):
         """
         Initialize the Code Analyzer agent.
 
         Args:
             config: Configuration dict containing model settings
-            shell_tool: Shell execution tool for codebase exploration
+            file_system_tool: Shell execution tool for codebase exploration
             graphify_tool: Tool for interacting with the knowledge graph
             playbook_instructions: Optional strategic instructions from a playbook
         """
         self.config = config
-        self.shell_tool = shell_tool
+        self.file_system_tool = file_system_tool
         self.graphify_tool = graphify_tool
         self.playbook_instructions = playbook_instructions
         self.logger = logging.getLogger(__name__)
@@ -77,73 +77,41 @@ class CodeAnalyzer:
             base_message += "\nIMPORTANT: The above playbook provides your strategic goal and persona. Integrate these instructions into your technical analysis process.\n"
 
         base_message += r"""
-CRITICAL: You MUST always start by exploring the codebase with shell commands before providing any analysis.
+CRITICAL: You MUST always start by exploring the codebase with file system operations before providing any analysis.
 
 Your capabilities:
 - Multi-round iterative analysis with self-assessment
-- Requesting shell command execution for codebase exploration
+- Requesting file system operations for codebase exploration
 - Progressive knowledge building and confidence assessment
-- Strategic command selection based on task context
+- Strategic operation selection based on task context
 
 🔍 DISCOVERY-DRIVEN ANALYSIS PHILOSOPHY:
 Be a detective, not a robot. Let curiosity and discovery drive your analysis rather than following rigid checklists.
 Trust your pattern recognition abilities and adapt your exploration strategy based on what the codebase reveals to you.
 
-**Core Principles**:
-- **Curiosity over Checklists**: Explore what's interesting rather than what's expected
-- **Content-Driven Discovery**: Let what you find guide what you look for next
-- **Adaptive Exploration**: Change strategy based on what the codebase reveals
-- **Universal Understanding**: Focus on concepts rather than language-specific patterns
-
 🚀 SMART ANALYSIS STRATEGY:
 
 1. **Discovery Phase**: Start broad, then adapt based on what you find
-   - Project landscape: `ls -la`, `find . -type f | head -20`
-   - File type analysis: `file $(find . -type f | head -10)`
-   - Content diversity: `wc -l $(find . -type f | head -10)`
+   - Project landscape: {"action": "list_directory", "arguments": {"path": "."}}
 
 2. **Adaptive Pattern Recognition**: Let the content guide your search patterns
    - Universal concepts: functions, classes, imports, configuration, logic flow
-   - Creative grep usage: search for keywords that appear in the actual code
-   - Pattern discovery: `grep`, `awk`, `sed` to extract interesting patterns you discover
+   - Pattern discovery: {"action": "search_content", "arguments": {"query": "import|from", "path": "src"}}
 
 3. **Progressive Understanding**: Build knowledge incrementally
-   - Sample content: `head -20 filename && tail -20 filename`
-   - Strategic reading: adapt based on file size and discovered patterns
+   - Strategic reading: {"action": "read_file", "arguments": {"path": "main.py", "start_line": 1, "max_lines": 200}}
    - Context building: connect findings across files
 
-4. **Intelligent Tool Usage**: Be creative with standard tools
-   - Text tools: `cat`, `head`, `tail`, `grep`, `awk`, `sed`
-   - Analysis tools: `wc`, `file`, `stat`, `sort | uniq -c`
-   - Search patterns: adapt based on content, not predefined rules
-
-🛠️ SHELL COMMAND GUIDANCE:
-Only request READ-ONLY commands for safety:
-- File exploration: `ls`, `find`, `tree`
-- Content reading: `cat`, `head`, `tail`, `less`
-- Text processing: `grep`, `awk`, `sed` (without -i flag)
-- Information: `wc`, `file`, `stat`
-- Advanced search: `grep` with `-r`, `-n`, `-A`, `-B` options
-
-📁 BINARY FILE HANDLING:
-When encountering binary files (executables, images, compiled code, etc.):
-- **First step**: Always use `file filename` to identify file type
-- **For text extraction**: Use `strings filename | head -20` to extract readable text from binaries
-- **Size analysis**: Use `ls -lh filename` to check file size
-- **Focus on metadata**: Use `file`, `stat`, and `ls` for file information
-
-⚠️ AVOID THESE TOOLS:
-- **DO NOT use**: `xxd`, `od`, `hexdump` for binary inspection
-- **DO NOT use**: `cat` on binary files (it can break terminals)
-- **Reason**: These tools are rarely needed for codebase analysis and can produce excessive output
-- **Alternative**: Focus on text content, file types, and using `strings` for binaries when needed
+🛠️ FILE OPERATION GUIDANCE:
+Only request READ-ONLY operations for safety using the exact JSON syntax:
+- "list_directory": View contents of a directory. Args: {"path": "..."}
+- "read_file": Read lines of a file. Args: {"path": "...", "start_line": 1, "max_lines": 300}
+- "search_content": Regex search traversing non-binary files. Args: {"query": "regexPattern", "path": "."}
 
 📋 FILE READING BEST PRACTICES:
-1. **Always start with**: `file filename` and `wc -l filename`
-2. **For small files** (<100 lines): Read entirely with `cat`
-3. **For medium files** (100-500 lines): Sample sections, then read strategically
-4. **For large files** (>500 lines): Use targeted reading based on discovered patterns
-5. **Let content guide approach**: If you see SQL, search for database patterns; if config, look for settings
+1. **Always start with**: "list_directory" to map the surface.
+2. **For search**: Use "search_content" with specific, meaningful regex.
+3. **Let content guide approach**: Read specific files discovered during search via "read_file".
 
 🧠 COLLABORATIVE KNOWLEDGE BASE:
 Maintain a "key_findings" list that serves as shared memory across iterations:
@@ -154,37 +122,23 @@ Maintain a "key_findings" list that serves as shared memory across iterations:
 
         RESPONSE FORMAT: You MUST respond in valid JSON format with these exact fields:
         {
-            "need_shell_execution": true/false,
-            "shell_commands": ["command1", "command2", ...],
+            "need_file_operations": true/false,
+            "file_operations": [{"action": "list_directory", "arguments": {"path": "."}}, {"action": "search_content", "arguments": {"query": "class", "path": "."}}],
             "need_graph_query": true/false,
-            "graph_queries": [{"tool": "query_graph", "arguments": {"question": "..."}}, ...],
-            "key_findings": ["Finding 1", "Finding 2", "..."],
+            "graph_queries": [{"tool": "query_graph", "arguments": {"question": "..."}}],
+            "key_findings": ["Finding 1", "Finding 2"],
             "current_analysis": "Your analysis of this iteration",
             "confidence_level": 1-10,
             "next_focus_areas": "What you plan to focus on next"
         }
 
 🎯 ANALYSIS PROCESS:
-1. **First iteration**: ALWAYS set need_shell_execution: true with discovery commands
+1. **First iteration**: ALWAYS set need_file_operations: true with discovery operations
 2. **Progressive exploration**: Let findings guide next steps
 3. **Content reading**: Don't just list files - read and understand content
-4. **Pattern adaptation**: Adapt search patterns based on what you discover
-5. **Knowledge building**: Build understanding incrementally across iterations
-6. **Convergence**: Continue until confident or max iterations reached
 
 💡 FIRST ITERATION STARTER COMMANDS:
-- `["ls -la", "find . -type f | head -20", "file $(find . -type f | head -5)"]`
-
-Always explain your findings with specific examples, line numbers, and evidence from the code.
-
-🚀 GRAPH-INFORMED ANALYSIS (Graphify v5):
-When a knowledge graph is available, use it to understand architectural patterns before searching raw files.
-- GOD NODES: Identify the project's central abstractions and high-level logic.
-- COMMUNITIES: Understand how files are grouped into logical modules.
-- PATHS: Use graph tools to trace how data or execution flows between distant components.
-- RELATIONSHIPS: Check 'inherits', 'imports', and 'calls' edges to build a mental map of the system.
-
-Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
+- [{"action": "list_directory", "arguments": {"path": "."}}]
 """
         
         return base_message
@@ -209,7 +163,7 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
         max_iterations = 10
         current_iteration = 0
         analysis_context = []
-        shell_execution_history = []
+        file_operation_history = []
         shared_key_findings = initial_findings or []  # Collaborative knowledge base
         convergence_indicators = {
             "sufficient_code_coverage": False,
@@ -226,7 +180,7 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
                 codebase_path,
                 current_iteration,
                 analysis_context,
-                shell_execution_history,
+                file_operation_history,
                 shared_key_findings,
                 convergence_indicators,
                 specialist_feedback,
@@ -264,28 +218,28 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
                     shared_key_findings = llm_decision["key_findings"]
 
             except json.JSONDecodeError as e:
-                # Fallback: treat as plain text analysis without shell commands
+                # Fallback: treat as plain text analysis without file system operations
                 self.logger.warning(f"JSON parsing failed: {e}")
                 self.logger.warning(f"Raw response was: {response_text[:200]}...")
                 llm_decision = {
-                    "need_shell_execution": False,
-                    "shell_commands": [],
+                    "need_file_operations": False,
+                    "file_operations": [],
                     "key_findings": shared_key_findings,  # Preserve existing findings
                     "current_analysis": response_text,
                     "confidence_level": 5,
                     "next_focus_areas": "Continue analysis",
                 }
 
-            # Execute shell commands if needed (execution phase)
-            shell_results = []
-            if llm_decision.get("need_shell_execution", False):
-                shell_commands = llm_decision.get("shell_commands", [])
-                shell_results = self._execute_shell_commands(shell_commands)
-                shell_execution_history.append(
+            # Execute file system operations if needed (execution phase)
+            file_results = []
+            if llm_decision.get("need_file_operations", False):
+                file_operations = llm_decision.get("file_operations", [])
+                file_results = self._execute_file_operations(file_operations)
+                file_operation_history.append(
                     {
                         "iteration": current_iteration,
-                        "commands": shell_commands,
-                        "results": shell_results,
+                        "commands": file_operations,
+                        "results": file_results,
                         "timestamp": self._get_timestamp(),
                     }
                 )
@@ -309,7 +263,7 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
                 {
                     "iteration": current_iteration,
                     "llm_decision": llm_decision,
-                    "shell_results": shell_results,
+                    "file_results": file_results,
                     "graph_results": graph_results,
                     "timestamp": self._get_timestamp(),
                 }
@@ -329,7 +283,7 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
                     )
                     milestone_summary = self._generate_milestone_summary(
                         query,
-                        shell_execution_history,
+                        file_operation_history,
                         analysis_context,
                         current_iteration,
                         milestone_interval,
@@ -349,7 +303,7 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
 
             # Check if analysis is complete
             if self._should_terminate(convergence_indicators) or not llm_decision.get(
-                "need_shell_execution", True
+                "need_file_operations", True
             ):
                 break
 
@@ -358,14 +312,17 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
             query, analysis_context, shared_key_findings, convergence_indicators
         )
 
-    def _execute_shell_commands(self, commands: list[str]) -> list[dict]:
-        """Execute a list of shell commands and return results."""
+    def _execute_file_operations(self, operations: list[dict]) -> list[dict]:
+        """Execute a list of structured file operations and return results."""
         results = []
-        for command in commands:
+        for op in operations:
+            action = op.get("action", "unknown")
+            arguments = op.get("arguments", {})
             try:
-                success, stdout, stderr = self.shell_tool.execute_command(command)
+                success, stdout, stderr = self.file_system_tool.execute_operation(action, arguments)
                 result = {
-                    "command": command,
+                    "action": action,
+                    "arguments": arguments,
                     "success": success,
                     "stdout": stdout or "",
                     "stderr": stderr or "",
@@ -373,7 +330,8 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
                 }
             except Exception as e:
                 result = {
-                    "command": command,
+                    "action": action,
+                    "arguments": arguments,
                     "success": False,
                     "stdout": "",
                     "stderr": "",
@@ -397,11 +355,11 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
             convergence["confidence_threshold_met"] = True
 
         # Check if LLM indicates no need for more shell execution
-        if not llm_decision.get("need_shell_execution", True):
+        if not llm_decision.get("need_file_operations", True):
             convergence["question_answered"] = True
 
-        # Check for code coverage based on number of iterations and shell commands executed
-        total_commands = sum(len(ctx.get("shell_results", [])) for ctx in context)
+        # Check for code coverage based on number of iterations and file system operations executed
+        total_commands = sum(len(ctx.get("file_results", [])) for ctx in context)
         if total_commands >= 3 or len(context) >= 2:
             convergence["sufficient_code_coverage"] = True
 
@@ -459,7 +417,7 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
         for shell_exec in relevant_shell_history:
             summary_prompt += f"\nIteration {shell_exec['iteration']}:\n"
             for result in shell_exec["results"]:
-                summary_prompt += f"Command: {result['command']}\n"
+                summary_prompt += f"Action: {result['action']} {result['arguments']}\n"
                 if result["success"] and result.get("stdout"):
                     # Include more complete output for summary purposes
                     stdout_sample = result["stdout"][:800]  # More context for summary
@@ -521,12 +479,12 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
                 return summary.strip()
             else:
                 # Fallback summary if LLM fails
-                return f"Milestone {current_iteration//milestone_interval} completed iterations {start_iteration}-{end_iteration}. Executed {len(relevant_shell_history)} shell sessions with focus on {query}."
+                return f"Milestone {current_iteration//milestone_interval} completed iterations {start_iteration}-{end_iteration}. Executed {len(relevant_shell_history)} file operation sessions with focus on {query}."
 
         except Exception as e:
             self.logger.warning(f"LLM summary generation failed: {e}")
             # Simple fallback summary
-            return f"Milestone summary for iterations {start_iteration}-{end_iteration}: Executed {len(relevant_shell_history)} shell sessions analyzing {query}."
+            return f"Milestone summary for iterations {start_iteration}-{end_iteration}: Executed {len(relevant_shell_history)} file operation sessions analyzing {query}."
 
     def _build_iteration_prompt(
         self,
@@ -566,11 +524,11 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
         - For architectural questions: Focus on structure, relationships, and high-level patterns
         - For implementation questions: Dive deep into specific code logic and details
 
-        🔧 RECOMMENDED SHELL COMMANDS:
-        - Exploration: ls, find, tree (understand structure)
-        - Search: grep -r, grep -n (find specific content)
-        - Content: cat, head, tail (read file contents)
-        - Analysis: wc, file, stat (get file information)
+        🔧 RECOMMENDED FILE OPERATIONS:
+        - Exploration: "list_directory"
+        - Search: "search_content"
+        - Content: "read_file"
+        - Analysis: "read_file" (view structure)
 
         Remember: You must respond in valid JSON format with the exact structure specified in your system message.
 
@@ -607,7 +565,7 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
             for shell_exec in shell_history[-2:]:  # Show last 2 executions
                 base_prompt += f"\nIteration {shell_exec['iteration']}:\n"
                 for result in shell_exec["results"]:
-                    base_prompt += f"Command: {result['command']}\n"
+                    base_prompt += f"Action: {result['action']} {result['arguments']}\n"
                     if result["success"]:
                         stdout_preview = (
                             result["stdout"][:300] + "..."
@@ -646,8 +604,8 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
 
         🎯 DECISION POINTS FOR THIS ITERATION:
         Based on the shared knowledge base and your analysis so far, decide:
-        1. Do you need more information via shell commands? (set need_shell_execution: true/false)
-        2. What specific commands would help you gather the missing information?
+        1. Do you need more information via file system operations? (set need_file_operations: true/false)
+        2. What specific file operations would help you gather the missing information?
         3. What is your current confidence level (1-10) in providing a comprehensive answer?
         4. If confidence >= 8, consider providing your final comprehensive analysis
 
@@ -661,8 +619,8 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
 
         RESPONSE FORMAT: You MUST respond in valid JSON format with these exact fields:
         {{
-            "need_shell_execution": true/false,
-            "shell_commands": ["command1", "command2", ...],
+            "need_file_operations": true/false,
+            "file_operations": ["command1", "command2", ...],
             "key_findings": ["Updated list of key findings from all iterations"],
             "current_analysis": "Your analysis of this iteration and current understanding",
             "confidence_level": 1-10,
@@ -732,16 +690,16 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
         # Add execution summary
         for ctx in context:
             iteration = ctx["iteration"]
-            shell_results = ctx.get("shell_results", [])
+            file_results = ctx.get("file_results", [])
             llm_decision = ctx.get("llm_decision", {})
 
             synthesis += f"\n--- Iteration {iteration} ---\n"
-            synthesis += f"Actions executed: {len(shell_results) + len(ctx.get('graph_results', []))}\n"
+            synthesis += f"Actions executed: {len(file_results) + len(ctx.get('graph_results', []))}\n"
             
-            if shell_results:
-                for result in shell_results:
+            if file_results:
+                for result in file_results:
                     status = "✓" if result["success"] else "✗"
-                    synthesis += f"  {status} {result['command']}\n"
+                    synthesis += f"  {status} {result['action']} {result['arguments']}\n"
             
             if ctx.get("graph_results"):
                 for g_res in ctx["graph_results"]:
@@ -778,19 +736,19 @@ Hierarchical Strategy: **Structure (Graph) -> Detail (Shell)**.
             for ctx in context:
                 iteration = ctx.get("iteration", "Unknown")
                 llm_decision = ctx.get("llm_decision", {})
-                shell_results = ctx.get("shell_results", [])
+                file_results = ctx.get("file_results", [])
 
                 synthesis_prompt += f"\nIteration {iteration}:\n"
 
-                # Add shell command insights
-                if shell_results:
-                    synthesis_prompt += "Commands executed and key discoveries:\n"
-                    for result in shell_results:
+                # Add file system operation insights
+                if file_results:
+                    synthesis_prompt += "Actions executed and key discoveries:\n"
+                    for result in file_results:
                         if result.get("success") and result.get("stdout"):
                             # Include relevant command output (truncated)
                             stdout_sample = result["stdout"][:500]
                             synthesis_prompt += (
-                                f"- {result['command']}: {stdout_sample}...\n"
+                                f"- {result['action']} {result['arguments']}: {stdout_sample}...\n"
                             )
 
                 # Add LLM analysis from this iteration
