@@ -85,17 +85,17 @@ def cli(log_level: str, console_level: str, logs_dir: str, verbose: bool) -> Non
     help="Working directory for analysis (default: codebase_path)",
 )
 @click.option(
-    "--playbook",
+    "--playbooks",
     "-p",
     default=None,
-    help="Name of a playbook to use for strategic guidance (e.g., 'design_solution')",
+    help="Comma-separated names of playbooks to run sequentially (e.g., 'system_architecture_diagram,security_vulnerability_scan')",
 )
 def analyze(
     codebase_path: str,
     task_description: str,
     output_format: str,
     working_dir: str | None,
-    playbook: str | None,
+    playbooks: str | None,
 ) -> None:
     """Analyze codebase for specific development task.
 
@@ -147,7 +147,7 @@ def analyze(
         # Initialize agent manager
         with console.status("[bold green]Initializing AI agents..."):
             agent_manager = AgentManager(config_manager)
-            agent_manager.initialize_agents(playbook_name=playbook)
+            agent_manager.initialize_agents()
 
         # Perform analysis with progress indication
         console.print("\n[bold green]Starting codebase analysis...[/bold green]")
@@ -160,9 +160,12 @@ def analyze(
         ) as progress:
             task = progress.add_task("Analyzing codebase with AI agents...", total=None)
 
+            # Parse playbooks list
+            playbooks_list = [p.strip() for p in playbooks.split(",")] if playbooks else []
+
             # Execute the analysis
             result, statistics = agent_manager.process_query_with_review_cycle(
-                task_description, str(working_directory)
+                task_description, str(working_directory), playbook_names=playbooks_list
             )
 
             progress.update(task, description="Analysis complete!")

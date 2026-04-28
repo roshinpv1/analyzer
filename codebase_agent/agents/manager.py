@@ -45,29 +45,15 @@ class AgentManager:
         self.graphify_cli: GraphifyCLI | None = None
         self.graphify_tool: GraphifyTool | None = None
 
-    def initialize_agents(self, playbook_name: Optional[str] = None) -> None:
+    def initialize_agents(self) -> None:
         """
-        Initialize the multi-agent system.
-
-        Args:
-            playbook_name: Optional name of a playbook to load for strategic guidance.
+        Initialize the multi-agent system foundation.
 
         Raises:
             Exception: If agent initialization fails
         """
         try:
             model_client = self.config_manager.get_model_client()
-
-            # Handle playbook loading
-            playbook_instructions = None
-            if playbook_name:
-                pm = PlaybookManager()
-                playbook = pm.load_playbook(playbook_name)
-                if playbook:
-                    self.logger.info(f"Loading playbook: {playbook_name}")
-                    playbook_instructions = playbook.sanitize_for_tools(available_tools=["shell", "graphify"])
-                else:
-                    self.logger.warning(f"Playbook '{playbook_name}' not found. Proceeding with default strategy.")
 
             # Create shell tool (we'll use current directory as default,
             # but this will be overridden by the actual codebase path during analysis)
@@ -77,7 +63,7 @@ class AgentManager:
             self.graphify_cli = GraphifyCLI(".")
             self.graphify_tool = GraphifyTool(".")
 
-            self.code_analyzer = CodeAnalyzer(model_client, shell_tool, self.graphify_tool, playbook_instructions=playbook_instructions)
+            self.code_analyzer = CodeAnalyzer(model_client, shell_tool, self.graphify_tool)
             self.task_specialist = TaskSpecialist(model_client)
 
             self.logger.info("Successfully initialized all agents with Graphify support")
@@ -87,27 +73,18 @@ class AgentManager:
             raise
 
     def process_query_with_review_cycle(
-        self, query: str, codebase_path: str
+        self, query: str, codebase_path: str, playbook_names: list[str] = None
     ) -> tuple[str, dict]:
         """
-        Process user query through multi-round analysis and review cycle.
-
-        This method implements the core review cycle:
-        1. Code Analyzer analyzes the codebase
-        2. Task Specialist reviews the analysis
-        3. If not satisfied, specialist provides feedback and analyzer re-analyzes
-        4. Repeat up to 3 times, then force accept
+        Process user query through multi-playbook pipeline and review cycles.
 
         Args:
             query: User's task description
             codebase_path: Path to the codebase to analyze
+            playbook_names: Optional list of playbook names for sequential chaining.
 
         Returns:
-            Tuple of (final_response, statistics) where statistics contains:
-            - total_review_cycles: Total number of review cycles executed
-            - rejections: Number of times Task Specialist rejected the analysis
-            - final_acceptance_type: 'accepted' or 'forced'
-            - final_confidence: Final confidence score from Task Specialist
+            Tuple of (final_combined_response, statistics)
         """
         if not self.code_analyzer or not self.task_specialist:
             raise RuntimeError(
@@ -117,16 +94,17 @@ class AgentManager:
         self.logger.info(f"Starting analysis for query: {query}")
         self.logger.info(f"Codebase path: {codebase_path}")
 
-        # Initialize statistics tracking
-        statistics = {
+        playbooks_to_run = playbook_names if playbook_names else [None]
+
+        # Initialize global statistics tracking
+        overall_stats = {
             "total_review_cycles": 0,
             "rejections": 0,
             "final_acceptance_type": "unknown",
             "final_confidence": 0.0,
+            "completed_playbooks": 0,
+            "failed_playbooks": 0
         }
-
-        specialist_feedback = None
-        review_count = 0
 
         # Run Graphify indexing before starting review cycles
         self.logger.info("Running Graphify indexing...")
@@ -135,10 +113,9 @@ class AgentManager:
             # Re-initialize CLI/Tool with the actual codebase path
             self.graphify_cli = GraphifyCLI(codebase_path)
             self.graphify_tool = GraphifyTool(codebase_path)
-            # Update analyzer's tools
+            
             if self.code_analyzer:
                 self.code_analyzer.graphify_tool = self.graphify_tool
-                # CRITICAL: Also update the ShellTool's working directory to the target codebase!
                 if hasattr(self.code_analyzer, 'shell_tool'):
                     from pathlib import Path
                     self.code_analyzer.shell_tool.working_directory = Path(codebase_path).resolve()
@@ -155,13 +132,97 @@ class AgentManager:
             else:
                 self.logger.warning("Graphify indexing failed - proceeding with standard analysis")
         
+        all_final_responses = []
+        previous_chain_findings = None
+
+        for p_name in playbooks_to_run:
+            self.logger.info(f"--- Starting execution for playbook: {p_name or 'DEFAULT'} ---")
+            
+            # Load instructions and instantiate CodeAnalyzer specific to this playbook
+            playbook_instructions = None
+            if p_name:
+                pm = PlaybookManager()
+                playbook = pm.load_playbook(p_name)
+                if playbook:
+                    self.logger.info(f"Loaded playbook instructions for: {p_name}")
+                    playbook_instructions = playbook.sanitize_for_tools(available_tools=["shell", "graphify"])
+                else:
+                    error_msg = f"Playbook '{p_name}' not found. Marking as error and continuing."
+                    self.logger.error(error_msg)
+                    all_final_responses.append(f"## Playbook: {p_name}\n**ERROR**: {error_msg}")
+                    overall_stats["failed_playbooks"] += 1
+                    continue
+            
+            try:
+                # Prepare a fresh CodeAnalyzer instance for this iteration 
+                model_client = self.config_manager.get_model_client()
+                from ..tools.shell_tool import ShellTool
+                from pathlib import Path
+                shell_tool = ShellTool(Path(codebase_path).resolve())
+                self.code_analyzer = CodeAnalyzer(
+                    model_client, shell_tool, self.graphify_tool, playbook_instructions=playbook_instructions
+                )
+                
+                # Incorporate context from previous playbook into initial findings
+                current_initial_findings = initial_findings.copy()
+                if previous_chain_findings:
+                    current_initial_findings.append(
+                        f"📊 FINDINGS FROM PREVIOUS PLAYBOOK STAGE:\n{previous_chain_findings}"
+                    )
+                
+                # Execute single cycle loop internally
+                response, stats_output = self._run_single_review_cycle(
+                    query=query, 
+                    codebase_path=codebase_path,
+                    initial_findings=current_initial_findings
+                )
+                
+                # Update stats
+                overall_stats["total_review_cycles"] += stats_output["total_review_cycles"]
+                overall_stats["rejections"] += stats_output["rejections"]
+                overall_stats["final_acceptance_type"] = stats_output["final_acceptance_type"]
+                overall_stats["final_confidence"] = stats_output["final_confidence"]
+                overall_stats["completed_playbooks"] += 1
+                
+                playbook_title_display = p_name if p_name else "Default Analysis"
+                formatted_resp = f"## Results for: {playbook_title_display}\n\n{response}"
+                all_final_responses.append(formatted_resp)
+                
+                # The output context becomes available for the next playbook
+                previous_chain_findings = response
+
+                # Only inject graphify context once at start, so clear for subsequent runs
+                initial_findings = []
+                
+            except Exception as e:
+                self.logger.error(f"Execution of playbook '{p_name}' failed: {e}")
+                overall_stats["failed_playbooks"] += 1
+                all_final_responses.append(f"## Playbook: {p_name}\n**ERROR (Execution Failed)**: {e}")
+                continue
+
+        final_combined_response = "\n\n---\n\n".join(all_final_responses)
+        return final_combined_response, overall_stats
+
+    def _run_single_review_cycle(
+        self, query: str, codebase_path: str, initial_findings: list[str]
+    ) -> tuple[str, dict]:
+        """Runs the loop of specialist reviewing the code analyzer for a single context."""
+        statistics = {
+            "total_review_cycles": 0,
+            "rejections": 0,
+            "final_acceptance_type": "unknown",
+            "final_confidence": 0.0,
+        }
+
+        specialist_feedback = None
+        review_count = 0
+        
+        # Base code analyzer uses its internal loop reference - assuming it's correctly patched to self
         while review_count < self.max_specialist_reviews:
             review_count += 1
             statistics["total_review_cycles"] = review_count
 
-            self.logger.info(
-                f"Starting review cycle {review_count}/{self.max_specialist_reviews}"
-            )
+            self.logger.info(f"Starting review cycle {review_count}/{self.max_specialist_reviews}")
 
             # Code Analyzer analyzes the codebase
             self.logger.info("Code Analyzer starting analysis...")
@@ -186,40 +247,24 @@ class AgentManager:
             if is_complete:
                 statistics["final_acceptance_type"] = "accepted"
                 statistics["final_confidence"] = confidence_score
-                self.logger.info(
-                    f"Analysis accepted on review cycle {review_count} with confidence {confidence_score:.2f}"
-                )
-                final_response = self._synthesize_final_response(
-                    analysis_result, True, feedback_message, query
-                )
-                return final_response, statistics
+                self.logger.info(f"Analysis accepted on review cycle {review_count} with confidence {confidence_score:.2f}")
+                return self._synthesize_final_response(analysis_result, True, feedback_message, query), statistics
 
-            # Track rejection
             statistics["rejections"] += 1
 
-            # If this was the last allowed review, force accept
             if review_count >= self.max_specialist_reviews:
                 statistics["final_acceptance_type"] = "forced"
                 statistics["final_confidence"] = confidence_score
-                self.logger.warning(
-                    f"Max reviews ({self.max_specialist_reviews}) reached. Force accepting analysis."
-                )
-                final_response = self._synthesize_final_response(
-                    analysis_result, False, feedback_message, query
-                )
-                return final_response, statistics
+                self.logger.warning(f"Max reviews ({self.max_specialist_reviews}) reached. Force accepting analysis.")
+                return self._synthesize_final_response(analysis_result, False, feedback_message, query), statistics
 
-            # Get feedback and prepare for next iteration
             self.logger.info(f"Analysis rejected. Feedback: {feedback_message}")
             specialist_feedback = feedback_message
 
-        # This should never be reached due to the force accept logic above
         statistics["final_acceptance_type"] = "forced"
-        statistics["final_confidence"] = confidence_score
-        final_response = self._synthesize_final_response(
-            analysis_result, False, feedback_message, query
-        )
-        return final_response, statistics
+        statistics["final_confidence"] = 0.0
+        return self._synthesize_final_response(analysis_result, False, "Completed via fallback.", query), statistics
+
 
     def _synthesize_final_response(
         self,
