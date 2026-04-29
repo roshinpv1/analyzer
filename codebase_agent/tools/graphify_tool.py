@@ -19,6 +19,7 @@ class GraphifyTool:
         self.codebase_path = Path(codebase_path).resolve()
         self.output_dir = Path(output_dir).resolve()
         self.graph_json = self.output_dir / "graph.json"
+        self.usage_stats: Dict[str, int] = {}
         
     def _run_cli(self, subcommand: str, *args: str) -> str:
         """Run a graphify CLI command and return output."""
@@ -74,6 +75,7 @@ class GraphifyTool:
         """
         Dispatcher for agent-requested graph tools.
         """
+        self.usage_stats[tool_name] = self.usage_stats.get(tool_name, 0) + 1
         if tool_name == "query_graph":
             return self.query(arguments.get("question", ""), arguments.get("mode", "bfs"))
         elif tool_name == "shortest_path":

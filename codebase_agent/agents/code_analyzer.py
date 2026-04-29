@@ -107,11 +107,21 @@ Only request READ-ONLY operations for safety using the exact JSON syntax:
 - "list_directory": View contents of a directory. Args: {"path": "..."}
 - "read_file": Read lines of a file. Args: {"path": "...", "start_line": 1, "max_lines": 300}
 - "search_content": Regex search traversing non-binary files. Args: {"query": "regexPattern", "path": "."}
+- "fuzzy_search": BM25/TF-IDF semantic matching for broad concepts. Args: {"query": "keywords", "algorithm": "bm25", "top_k": 5}
 
 📋 FILE READING BEST PRACTICES:
 1. **Always start with**: "list_directory" to map the surface.
-2. **For search**: Use "search_content" with specific, meaningful regex.
-3. **Let content guide approach**: Read specific files discovered during search via "read_file".
+2. **For specific symbols**: Use "search_content" with specific, meaningful regex.
+3. **For broad discovery**: Use "fuzzy_search" with general conceptual keywords (e.g., "configuration manager").
+4. **Let content guide approach**: Read specific files discovered during search via "read_file".
+
+🕸️ GRAPH QUERY GUIDANCE:
+You also have access to a structural knowledge graph of the codebase. You can execute graph queries by setting `need_graph_query: true` and providing `graph_queries`.
+Available graph tools:
+- "query_graph": Search the graph using natural language keywords. Args: {"question": "keyword or concept", "mode": "bfs"}
+- "shortest_path": Find path between two concepts. Args: {"source": "NodeA", "target": "NodeB"}
+- "explain": Get details and neighbors for a node. Args: {"label": "NodeName"}
+- "god_nodes": Identify the most connected files/classes. Args: {}
 
 🧠 COLLABORATIVE KNOWLEDGE BASE:
 Maintain a "key_findings" list that serves as shared memory across iterations:
@@ -133,12 +143,13 @@ Maintain a "key_findings" list that serves as shared memory across iterations:
         }
 
 🎯 ANALYSIS PROCESS:
-1. **First iteration**: ALWAYS set need_file_operations: true with discovery operations
+1. **First iteration**: ALWAYS set need_file_operations: true with discovery operations, and need_graph_query: true with "god_nodes" to understand the architecture.
 2. **Progressive exploration**: Let findings guide next steps
 3. **Content reading**: Don't just list files - read and understand content
 
 💡 FIRST ITERATION STARTER COMMANDS:
-- [{"action": "list_directory", "arguments": {"path": "."}}]
+- File Operations: [{"action": "list_directory", "arguments": {"path": "."}}]
+- Graph Queries: [{"tool": "god_nodes", "arguments": {}}]
 """
         
         return base_message
@@ -249,6 +260,14 @@ Maintain a "key_findings" list that serves as shared memory across iterations:
             if self.graphify_tool and llm_decision.get("need_graph_query", False):
                 self.logger.info(f"Executing {len(llm_decision.get('graph_queries', []))} graph queries")
                 for query_req in llm_decision.get("graph_queries", []):
+                    if isinstance(query_req, str):
+                        self.logger.warning(f"Expected dict for graph query, got string: {query_req}")
+                        graph_results.append({
+                            "tool": "unknown",
+                            "arguments": {"raw_query": query_req},
+                            "output": "Error: Invalid format. Expected JSON object with 'tool' and 'arguments'."
+                        })
+                        continue
                     tool_name = query_req.get("tool")
                     args = query_req.get("arguments", {})
                     output = self.graphify_tool.execute_tool(tool_name, args)
@@ -316,6 +335,18 @@ Maintain a "key_findings" list that serves as shared memory across iterations:
         """Execute a list of structured file operations and return results."""
         results = []
         for op in operations:
+            if isinstance(op, str):
+                self.logger.warning(f"Expected dict for file operation, got string: {op}")
+                results.append({
+                    "action": "unknown",
+                    "arguments": {"raw_command": op},
+                    "success": False,
+                    "stdout": "",
+                    "stderr": "",
+                    "error": "Invalid format: Expected JSON object with 'action' and 'arguments', got string.",
+                })
+                continue
+                
             action = op.get("action", "unknown")
             arguments = op.get("arguments", {})
             try:
@@ -620,7 +651,9 @@ Maintain a "key_findings" list that serves as shared memory across iterations:
         RESPONSE FORMAT: You MUST respond in valid JSON format with these exact fields:
         {{
             "need_file_operations": true/false,
-            "file_operations": ["command1", "command2", ...],
+            "file_operations": [{{"action": "list_directory", "arguments": {{"path": "."}}}}],
+            "need_graph_query": true/false,
+            "graph_queries": [{{"tool": "query_graph", "arguments": {{"question": "..."}}}}],
             "key_findings": ["Updated list of key findings from all iterations"],
             "current_analysis": "Your analysis of this iteration and current understanding",
             "confidence_level": 1-10,

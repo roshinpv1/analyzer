@@ -12,6 +12,8 @@ class FileSystemTool:
     def __init__(self, working_directory: str, max_output_size: int = 15000):
         self.working_directory = Path(working_directory).resolve()
         self.max_output_size = max_output_size
+        self.usage_stats: Dict[str, int] = {}
+        self._searcher = None  # Lazily instantiated CodebaseSearcher
         
         if not self.working_directory.exists() or not self.working_directory.is_dir():
             raise ValueError(f"Invalid working directory: {self.working_directory}")
@@ -21,6 +23,7 @@ class FileSystemTool:
         Execute a requested file operation based on the action name.
         Returns: (success_bool, stdout, stderr)
         """
+        self.usage_stats[action] = self.usage_stats.get(action, 0) + 1
         try:
             if action == "list_directory":
                 return True, self.list_directory(arguments.get("path", ".")), ""
@@ -30,6 +33,12 @@ class FileSystemTool:
                 return True, self.read_file(arguments.get("path", ""), start_line, max_lines), ""
             elif action == "search_content":
                 return True, self.search_content(arguments.get("query", ""), arguments.get("path", ".")), ""
+            elif action == "fuzzy_search":
+                return True, self.fuzzy_search(
+                    arguments.get("query", ""), 
+                    arguments.get("algorithm", "bm25"), 
+                    arguments.get("top_k", 5)
+                ), ""
             else:
                 return False, "", f"Unknown action: {action}"
         except Exception as e:
@@ -146,3 +155,33 @@ class FileSystemTool:
                         output.append(f"{rel_path}:{i}: {line.strip()}")
         except (UnicodeDecodeError, PermissionError):
             pass # Skip binaries and unreadable files
+
+    def fuzzy_search(self, query: str, algorithm: str = "bm25", top_k: int = 5) -> str:
+        """Perform semantic fuzzy matching across the codebase (BM25 or TF-IDF)."""
+        if not query:
+            return "Query cannot be empty"
+            
+        try:
+            if self._searcher is None:
+                from .search_engines import CodebaseSearcher
+                self._searcher = CodebaseSearcher(self.working_directory)
+                
+            results = self._searcher.search(query, algorithm=algorithm, top_k=top_k)
+            
+            if not results:
+                return f"No results found for '{query}' using {algorithm}."
+                
+            output = [f"Top {len(results)} matches for '{query}' ({algorithm}):\n"]
+            for filepath, score, snippet in results:
+                output.append(f"--- File: {filepath} (Score: {score:.2f}) ---")
+                output.append(snippet)
+                output.append("")
+                
+            res = "\n".join(output)
+            if len(res) > self.max_output_size:
+                return res[:self.max_output_size] + "\n...[Output truncated]"
+            return res
+            
+        except Exception as e:
+            logger.error(f"Fuzzy search failed: {e}", exc_info=True)
+            return f"Fuzzy search error: {e}"

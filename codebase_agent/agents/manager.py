@@ -6,7 +6,9 @@ Code Analyzer and Task Specialist through a review cycle mechanism.
 """
 
 import logging
+import os
 from typing import Any, Optional
+from functools import wraps
 
 from ..config.configuration import ConfigurationManager
 from ..tools.file_system_tool import FileSystemTool
@@ -16,6 +18,23 @@ from ..utils.playbook import PlaybookManager, Playbook
 from ..utils.graphify_cli import GraphifyCLI
 from ..tools.graphify_tool import GraphifyTool
 
+class AuthorizationError(Exception):
+    """Raised when an authorization check fails."""
+    pass
+
+def requires_role(role: str):
+    """Decorator to enforce role-based access control before execution."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # In a real system, this would check a JWT token or session context.
+            # Here we provide a foundational environment-based check.
+            user_role = os.environ.get("AGENT_USER_ROLE", "ADMIN")
+            if user_role != role:
+                raise AuthorizationError(f"Access denied: Requires role {role}, got {user_role}")
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 class AgentManager:
     """
@@ -35,7 +54,7 @@ class AgentManager:
         """
         self.config_manager = config_manager
         self.logger = logging.getLogger(__name__)
-        self.max_specialist_reviews = 3
+        self.max_specialist_reviews = 20
 
         # Initialize agents
         self.code_analyzer: CodeAnalyzer | None = None
@@ -45,23 +64,25 @@ class AgentManager:
         self.graphify_cli: GraphifyCLI | None = None
         self.graphify_tool: GraphifyTool | None = None
 
-    def initialize_agents(self) -> None:
+    def initialize_agents(self, codebase_path: str = ".") -> None:
         """
         Initialize the multi-agent system foundation.
 
+        Args:
+            codebase_path: The target codebase directory. Defaults to ".".
+            
         Raises:
             Exception: If agent initialization fails
         """
         try:
             model_client = self.config_manager.get_model_client()
 
-            # Create file system tool (we'll use current directory as default,
-            # but this will be overridden by the actual codebase path during analysis)
-            file_system_tool = FileSystemTool(".")
+            # Create file system tool with actual codebase path
+            file_system_tool = FileSystemTool(codebase_path)
 
-            # Initialize Graphify (using current directory as default)
-            self.graphify_cli = GraphifyCLI(".")
-            self.graphify_tool = GraphifyTool(".")
+            # Initialize Graphify with actual codebase path
+            self.graphify_cli = GraphifyCLI(codebase_path)
+            self.graphify_tool = GraphifyTool(codebase_path)
 
             self.code_analyzer = CodeAnalyzer(model_client, file_system_tool, self.graphify_tool)
             self.task_specialist = TaskSpecialist(model_client)
@@ -72,6 +93,7 @@ class AgentManager:
             self.logger.error(f"Failed to initialize agents: {e}")
             raise
 
+    @requires_role("ADMIN")
     def process_query_with_review_cycle(
         self, query: str, codebase_path: str, playbook_names: list[str] = None
     ) -> tuple[str, dict]:
@@ -103,23 +125,14 @@ class AgentManager:
             "final_acceptance_type": "unknown",
             "final_confidence": 0.0,
             "completed_playbooks": 0,
-            "failed_playbooks": 0
+            "failed_playbooks": 0,
+            "tools_used": {}
         }
 
         # Run Graphify indexing before starting review cycles
         self.logger.info("Running Graphify indexing...")
         initial_findings = []
         if self.graphify_cli:
-            # Re-initialize CLI/Tool with the actual codebase path
-            self.graphify_cli = GraphifyCLI(codebase_path)
-            self.graphify_tool = GraphifyTool(codebase_path)
-            
-            if self.code_analyzer:
-                self.code_analyzer.graphify_tool = self.graphify_tool
-                if hasattr(self.code_analyzer, 'file_system_tool'):
-                    from pathlib import Path
-                    self.code_analyzer.file_system_tool.working_directory = Path(codebase_path).resolve()
-                    self.logger.info(f"Synchronized FileSystemTool working directory to: {codebase_path}")
             
             if self.graphify_cli.index():
                 self.logger.info("Graphify indexing completed successfully")
@@ -183,6 +196,10 @@ class AgentManager:
                 overall_stats["final_confidence"] = stats_output["final_confidence"]
                 overall_stats["completed_playbooks"] += 1
                 
+                # Accumulate tool usage stats
+                for tool, count in file_system_tool.usage_stats.items():
+                    overall_stats["tools_used"][tool] = overall_stats["tools_used"].get(tool, 0) + count
+                
                 playbook_title_display = p_name if p_name else "Default Analysis"
                 formatted_resp = f"## Results for: {playbook_title_display}\n\n{response}"
                 all_final_responses.append(formatted_resp)
@@ -198,6 +215,11 @@ class AgentManager:
                 overall_stats["failed_playbooks"] += 1
                 all_final_responses.append(f"## Playbook: {p_name}\n**ERROR (Execution Failed)**: {e}")
                 continue
+
+        # Add graphify stats at the end since it's shared across playbooks
+        if self.graphify_tool and hasattr(self.graphify_tool, 'usage_stats'):
+            for tool, count in self.graphify_tool.usage_stats.items():
+                overall_stats["tools_used"][tool] = overall_stats["tools_used"].get(tool, 0) + count
 
         final_combined_response = "\n\n---\n\n".join(all_final_responses)
         return final_combined_response, overall_stats

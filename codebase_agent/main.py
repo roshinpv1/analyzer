@@ -379,6 +379,41 @@ def setup(codebase_path: str, check_api: bool) -> None:
         sys.exit(1)
 
 
+@cli.command()
+@click.option("--host", default="0.0.0.0", help="Host IP to bind the server to")
+@click.option("--port", default=8000, help="Port to bind the server to")
+@click.option("--workers", default=1, help="Number of worker processes")
+def serve(host: str, port: int, workers: int) -> None:
+    """Start the FastAPI REST server.
+    
+    This command spins up a Uvicorn server exposing the codebase-agent analysis capabilities via REST endpoints.
+    """
+    try:
+        import uvicorn
+        from .api.server import app
+        
+        console.print(f"[bold green]Starting Codebase Agent API server on {host}:{port}[/bold green]")
+        console.print(f"[cyan]Workers:[/cyan] {workers}")
+        console.print("[dim]Press Ctrl+C to stop the server[/dim]")
+        
+        uvicorn.run(
+            "codebase_agent.api.server:app",
+            host=host,
+            port=port,
+            workers=workers,
+            log_level="info",
+        )
+    except ImportError as e:
+        console.print("[red]Error: Required dependencies for API server not found.[/red]")
+        console.print("[yellow]Please make sure you have installed the API dependencies (fastapi, uvicorn).[/yellow]")
+        logger.exception("Missing dependencies for API server")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error starting API server: {e}[/red]")
+        logger.exception("Error starting API server")
+        sys.exit(1)
+
+
 def main():
     """Main entry point for the CLI."""
     try:

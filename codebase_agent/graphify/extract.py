@@ -649,6 +649,20 @@ _SWIFT_CONFIG = LanguageConfig(
 )
 
 
+_BASH_CONFIG = LanguageConfig(
+    ts_module="tree_sitter_bash",
+    class_types=frozenset(),
+    function_types=frozenset({"function_definition"}),
+    import_types=frozenset({"source_command"}),
+    call_types=frozenset({"command"}),
+    call_function_field="name",
+    call_accessor_node_types=frozenset(),
+    name_fallback_child_types=("word", "command_name"),
+    body_fallback_child_types=("compound_statement",),
+    function_boundary_types=frozenset({"function_definition"}),
+)
+
+
 # ── Generic extractor ─────────────────────────────────────────────────────────
 
 def _extract_generic(path: Path, config: LanguageConfig) -> dict:
@@ -1490,6 +1504,44 @@ def extract_blade(path: Path) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+def extract_jsp(path: Path) -> dict:
+    """Extract include directives from JSP and tag files."""
+    import re
+    try:
+        src = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"error": f"cannot read {path}"}
+
+    file_nid = _make_id(str(path))
+    nodes = [{"id": file_nid, "label": path.name, "file_type": "code",
+              "source_file": str(path), "source_location": None}]
+    edges = []
+
+    # <%@ include file="relativeURL" %>
+    for m in re.finditer(r'<%@\s*include\s+file\s*=\s*["\']([^"\']+)["\']\s*%>', src):
+        tgt = m.group(1).split('/')[-1]
+        tgt_nid = _make_id(tgt)
+        if tgt_nid not in {n["id"] for n in nodes}:
+            nodes.append({"id": tgt_nid, "label": m.group(1), "file_type": "code",
+                          "source_file": str(path), "source_location": None})
+        edges.append({"source": file_nid, "target": tgt_nid, "relation": "includes",
+                      "confidence": "EXTRACTED", "confidence_score": 1.0,
+                      "source_file": str(path), "source_location": None, "weight": 1.0})
+
+    # <jsp:include page="relativeURL" />
+    for m in re.finditer(r'<jsp:include\s+page\s*=\s*["\']([^"\']+)["\']', src):
+        tgt = m.group(1).split('/')[-1]
+        tgt_nid = _make_id(tgt)
+        if tgt_nid not in {n["id"] for n in nodes}:
+            nodes.append({"id": tgt_nid, "label": m.group(1), "file_type": "code",
+                          "source_file": str(path), "source_location": None})
+        edges.append({"source": file_nid, "target": tgt_nid, "relation": "includes",
+                      "confidence": "EXTRACTED", "confidence_score": 1.0,
+                      "source_file": str(path), "source_location": None, "weight": 1.0})
+
+    return {"nodes": nodes, "edges": edges}
+
+
 def extract_dart(path: Path) -> dict:
     """Extract classes, mixins, functions, imports, and calls from a .dart file using regex."""
     try:
@@ -1655,6 +1707,11 @@ def extract_lua(path: Path) -> dict:
 def extract_swift(path: Path) -> dict:
     """Extract classes, structs, protocols, functions, imports, and calls from a .swift file."""
     return _extract_generic(path, _SWIFT_CONFIG)
+
+
+def extract_bash(path: Path) -> dict:
+    """Extract functions and source commands from a bash/sh script."""
+    return _extract_generic(path, _BASH_CONFIG)
 
 
 # ── Julia extractor (custom walk) ────────────────────────────────────────────
@@ -3248,17 +3305,28 @@ def extract(paths: list[Path], cache_root: Path | None = None) -> dict:
         ".cc": extract_cpp,
         ".cxx": extract_cpp,
         ".hpp": extract_cpp,
+        ".hh": extract_cpp,
+        ".hxx": extract_cpp,
         ".rb": extract_ruby,
         ".cs": extract_csharp,
         ".kt": extract_kotlin,
         ".kts": extract_kotlin,
         ".scala": extract_scala,
+        ".sc": extract_scala,
         ".php": extract_php,
+        ".phtml": extract_php,
+        ".php4": extract_php,
+        ".php5": extract_php,
+        ".php7": extract_php,
+        ".phps": extract_php,
         ".swift": extract_swift,
         ".lua": extract_lua,
         ".toc": extract_lua,
         ".zig": extract_zig,
+        ".zir": extract_zig,
         ".ps1": extract_powershell,
+        ".psm1": extract_powershell,
+        ".psd1": extract_powershell,
         ".ex": extract_elixir,
         ".exs": extract_elixir,
         ".m": extract_objc,
@@ -3269,6 +3337,14 @@ def extract(paths: list[Path], cache_root: Path | None = None) -> dict:
         ".dart": extract_dart,
         ".v": extract_verilog,
         ".sv": extract_verilog,
+        ".svh": extract_verilog,
+        ".sh": extract_bash,
+        ".bash": extract_bash,
+        ".zsh": extract_bash,
+        ".jsp": extract_jsp,
+        ".jspx": extract_jsp,
+        ".tag": extract_jsp,
+        ".tagx": extract_jsp,
     }
 
     total = len(paths)
@@ -3385,11 +3461,16 @@ def collect_files(target: Path, *, follow_symlinks: bool = False, root: Path | N
     if target.is_file():
         return [target]
     _EXTENSIONS = {
-        ".py", ".js", ".ts", ".tsx", ".go", ".rs",
-        ".java", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp",
-        ".rb", ".cs", ".kt", ".kts", ".scala", ".php", ".swift",
-        ".lua", ".toc", ".zig", ".ps1",
-        ".m", ".mm",
+        ".py", ".js", ".jsx", ".mjs", ".ts", ".tsx", ".go", ".rs",
+        ".java", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx",
+        ".rb", ".cs", ".kt", ".kts", ".scala", ".sc",
+        ".php", ".phtml", ".php4", ".php5", ".php7", ".phps",
+        ".swift", ".lua", ".toc", ".zig", ".zir",
+        ".ps1", ".psm1", ".psd1", ".ex", ".exs",
+        ".m", ".mm", ".jl", ".vue", ".svelte", ".dart",
+        ".v", ".sv", ".svh", ".blade.php",
+        ".sh", ".bash", ".zsh",
+        ".jsp", ".jspx", ".tag", ".tagx",
     }
     from .detect import _load_graphifyignore, _is_ignored
     ignore_root = root if root is not None else target

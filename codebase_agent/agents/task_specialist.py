@@ -243,16 +243,16 @@ CONFIDENCE SCORING:
 - Below 0.7: Inadequate - requires major additional analysis
 
 FEEDBACK RULES:
-- For REJECTIONS: Provide specific shell commands to fill gaps
+- For REJECTIONS: Provide specific file system operations (search_content, fuzzy_search, read_file) or graph queries to fill gaps. Do NOT suggest bash/shell commands like grep or find.
 - For ACCEPTANCE: Briefly confirm what makes it ready for implementation
 
 RESPONSE FORMAT:
 JSON only: {{"is_complete": boolean, "feedback": "specific actionable guidance", "confidence": float}}
 
 REJECTION EXAMPLES:
-{{"is_complete": false, "feedback": "Missing data flow. Run: grep -r 'def process\\|def handle' . to find entry points, then trace how requests flow through the system", "confidence": 0.35}}
+{{"is_complete": false, "feedback": "Missing data flow. Use search_content for 'def process\\|def handle' or fuzzy_search for 'request handler' to find entry points, then trace how requests flow through the system", "confidence": 0.35}}
 
-{{"is_complete": false, "feedback": "Component interactions unclear. Execute: find . -name '*manager*.py' -exec grep -l 'def __init__' {{}} \\; then examine dependency injection patterns", "confidence": 0.40}}
+{{"is_complete": false, "feedback": "Component interactions unclear. Use graph_queries (god_nodes) or fuzzy_search to examine dependency injection patterns", "confidence": 0.40}}
 
 ACCEPTANCE EXAMPLE:
 {{"is_complete": true, "feedback": "Clear system operation explanation with task-specific entry points identified", "confidence": 0.87}}
