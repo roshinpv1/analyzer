@@ -24,6 +24,9 @@ class AnalyzeRequest(BaseModel):
     codebase_path: str = Field(..., description="Path to the codebase to analyze")
     task_description: str = Field(..., max_length=2000, description="Task or query description")
     playbooks: Optional[str] = Field(None, description="Comma-separated playbooks")
+    depth_profile: Optional[str] = Field(
+        "auto", description="Depth profile: auto|quick|standard|deep|forensic"
+    )
 
     @validator('codebase_path')
     def validate_codebase_path(cls, v):
@@ -35,6 +38,14 @@ class AnalyzeRequest(BaseModel):
             raise ValueError("Path traversal ('..') is not permitted in codebase_path.")
         return normalized
 
+    @validator("depth_profile")
+    def validate_depth_profile(cls, v):
+        allowed = {"auto", "quick", "standard", "deep", "forensic"}
+        value = (v or "auto").lower()
+        if value not in allowed:
+            raise ValueError("depth_profile must be one of auto, quick, standard, deep, forensic")
+        return value
+
 
 class AnalyzeResponse(BaseModel):
     codebase_path: str
@@ -42,6 +53,7 @@ class AnalyzeResponse(BaseModel):
     analysis_result: str
     execution_time: float
     timestamp: str
+    session_id: str
     statistics: dict
 
 
@@ -100,7 +112,10 @@ def analyze_codebase(request: AnalyzeRequest):
         # Execute the analysis
         # Using the codebase path as the working directory as well
         result, statistics = agent_manager.process_query_with_review_cycle(
-            request.task_description, str(codebase_path_obj), playbook_names=playbooks_list
+            request.task_description,
+            str(codebase_path_obj),
+            playbook_names=playbooks_list,
+            depth_profile=request.depth_profile or "auto",
         )
 
         execution_time = time.time() - start_time
@@ -112,6 +127,7 @@ def analyze_codebase(request: AnalyzeRequest):
             analysis_result=result,
             execution_time=execution_time,
             timestamp=time.strftime("%Y-%m-%d %H:%M:%S"),
+            session_id=statistics.get("session_id", "unknown"),
             statistics=statistics,
         )
 

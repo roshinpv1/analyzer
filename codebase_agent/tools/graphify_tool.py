@@ -1,88 +1,100 @@
 """
 Tool for interacting with Graphify structural knowledge graph.
-Provides both CLI-based one-off queries and MCP-based structured access.
+
+Uses in-process graph loading and ``runtime_dispatch`` so queries do not depend on a
+separate ``python3`` interpreter or working-directory quirks.
 """
-import subprocess
-import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
+
 
 class GraphifyTool:
     """
     Integrates Graphify structural knowledge into the agent's workflow.
     """
-    
-    def __init__(self, codebase_path: str, output_dir: str = "graphify-out"):
+
+    def __init__(self, codebase_path: str):
         self.codebase_path = Path(codebase_path).resolve()
-        self.output_dir = Path(output_dir).resolve()
+        if self.codebase_path.name == "graphify-out":
+            self.output_dir = self.codebase_path
+        else:
+            self.output_dir = self.codebase_path / "graphify-out"
+
         self.graph_json = self.output_dir / "graph.json"
         self.usage_stats: Dict[str, int] = {}
-        
-    def _run_cli(self, subcommand: str, *args: str) -> str:
-        """Run a graphify CLI command and return output."""
-        cmd = [
-            "python3", "-m", "codebase_agent.graphify",
-            subcommand, *args,
-            "--graph", str(self.graph_json)
-        ]
+        self._graph: Any = None  # nx.Graph when loaded
+        self._graph_failed: bool = False
+        self._graph_load_err: str = ""
+
+    def _get_graph(self):
+        """Return loaded NetworkX graph, or None if missing or failed."""
+        if self._graph is not None:
+            return self._graph
+        if self._graph_failed:
+            return None
+        if not self.graph_json.exists():
+            return None
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            return result.stdout
-        except subprocess.CalledProcessError as e:
-            return f"Error running graphify {subcommand}: {e.stderr or str(e)}"
+            from codebase_agent.graphify.runtime_dispatch import load_graph_nx
+
+            self._graph = load_graph_nx(self.graph_json)
+            return self._graph
+        except Exception as e:
+            logger.warning("GraphifyTool: failed to load %s: %s", self.graph_json, e)
+            self._graph_failed = True
+            self._graph_load_err = str(e)
+            return None
 
     def query(self, question: str, mode: str = "bfs") -> str:
-        """
-        Search the knowledge graph using natural language.
-        
-        Args:
-            question: The natural language question or keyword.
-            mode: 'bfs' for broad context, 'dfs' for deep tracing.
-        """
-        args = [question]
-        if mode == "dfs":
-            args.append("--dfs")
-        return self._run_cli("query", *args)
+        """Search the knowledge graph using natural language (lexical + hub fallback)."""
+        return self.execute_tool(
+            "query_graph", {"question": question, "mode": mode, "depth": 3, "token_budget": 2000}
+        )
 
     def get_path(self, source: str, target: str) -> str:
-        """
-        Find the shortest path between two concepts.
-        """
-        return self._run_cli("path", source, target)
+        """Find the shortest path between two concepts."""
+        return self.execute_tool("shortest_path", {"source": source, "target": target})
 
     def explain(self, node_label: str) -> str:
-        """
-        Get detailed information and neighbors for a specific node.
-        """
-        return self._run_cli("explain", node_label)
+        """Get detailed information and neighbors for a specific node."""
+        return self.execute_tool("explain", {"label": node_label})
 
     def get_god_nodes(self) -> str:
-        """
-        Identify the most central/connected nodes in the system.
-        """
-        # Note: God nodes is a report feature or can be queried via 'explain' on top nodes
-        return self._run_cli("query", "god nodes")
+        """Return the most central non-file hub nodes (same metric as MCP ``god_nodes``)."""
+        return self.execute_tool("god_nodes", {"top_n": 10})
 
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """
-        Dispatcher for agent-requested graph tools.
-        """
-        self.usage_stats[tool_name] = self.usage_stats.get(tool_name, 0) + 1
-        if tool_name == "query_graph":
-            return self.query(arguments.get("question", ""), arguments.get("mode", "bfs"))
-        elif tool_name == "shortest_path":
-            return self.get_path(arguments.get("source", ""), arguments.get("target", ""))
-        elif tool_name == "get_node" or tool_name == "explain":
-            return self.explain(arguments.get("label") or arguments.get("node_label", ""))
-        elif tool_name == "god_nodes":
-            return self.get_god_nodes()
-        else:
-            return f"Unknown graph tool: {tool_name}"
+        """Dispatcher for agent-requested graph tools."""
+        current_count = self.usage_stats.get(tool_name, 0)
+        if current_count >= 30:
+            logger.warning(
+                "Graph tool %s has reached its session limit (30). Blocking further calls.",
+                tool_name,
+            )
+            return (
+                f"Error: The graph tool '{tool_name}' has reached its maximum session limit. "
+                "Please proceed with the information you already have."
+            )
+
+        self.usage_stats[tool_name] = current_count + 1
+
+        g = self._get_graph()
+        if g is None:
+            if not self.graph_json.exists():
+                return (
+                    f"Error: No graph index at {self.graph_json}. "
+                    "Run indexing (analysis with graphify enabled) or from the repo root run: "
+                    "`python -m codebase_agent.graphify update <codebase_path>`."
+                )
+            return f"Error: Could not load graph: {self._graph_load_err or 'unknown error'}"
+
+        try:
+            from codebase_agent.graphify.runtime_dispatch import dispatch_tool
+
+            return dispatch_tool(g, tool_name, arguments)
+        except Exception as e:
+            logger.exception("GraphifyTool execute_tool failed: %s", tool_name)
+            return f"Error executing graph tool {tool_name}: {e}"

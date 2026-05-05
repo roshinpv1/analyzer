@@ -998,6 +998,7 @@ def main() -> None:
         print("  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report")
         print("  query \"<question>\"       BFS traversal of graph.json for a question")
         print("    --dfs                   use depth-first instead of breadth-first")
+        print("    --depth N               traversal depth 1-6 (default 3)")
         print("    --budget N              cap output at N tokens (default 2000)")
         print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
         print("  save-result             save a Q&A result to graphify-out/memory/ for graph feedback loop")
@@ -1162,14 +1163,17 @@ def main() -> None:
             sys.exit(1)
     elif cmd == "query":
         if len(sys.argv) < 3:
-            print("Usage: graphify query \"<question>\" [--dfs] [--budget N] [--graph path]", file=sys.stderr)
+            print(
+                "Usage: graphify query \"<question>\" [--dfs] [--depth N] [--budget N] [--graph path]",
+                file=sys.stderr,
+            )
             sys.exit(1)
-        from .serve import _score_nodes, _bfs, _dfs, _subgraph_to_text
-        from .security import sanitize_label
-        from networkx.readwrite import json_graph
+        from .runtime_dispatch import load_graph_nx, run_graph_query
+
         question = sys.argv[2]
         use_dfs = "--dfs" in sys.argv
         budget = 2000
+        depth = 3
         graph_path = "graphify-out/graph.json"
         args = sys.argv[3:]
         i = 0
@@ -1188,36 +1192,34 @@ def main() -> None:
                     print(f"error: --budget must be an integer", file=sys.stderr)
                     sys.exit(1)
                 i += 1
+            elif args[i] == "--depth" and i + 1 < len(args):
+                try:
+                    depth = int(args[i + 1])
+                except ValueError:
+                    print("error: --depth must be an integer", file=sys.stderr)
+                    sys.exit(1)
+                i += 2
+            elif args[i].startswith("--depth="):
+                try:
+                    depth = int(args[i].split("=", 1)[1])
+                except ValueError:
+                    print("error: --depth must be an integer", file=sys.stderr)
+                    sys.exit(1)
+                i += 1
             elif args[i] == "--graph" and i + 1 < len(args):
                 graph_path = args[i + 1]; i += 2
             else:
                 i += 1
         gp = Path(graph_path).resolve()
-        if not gp.exists():
-            print(f"error: graph file not found: {gp}", file=sys.stderr)
-            sys.exit(1)
-        if not gp.suffix == ".json":
-            print(f"error: graph file must be a .json file", file=sys.stderr)
-            sys.exit(1)
         try:
-            import json as _json
-            import networkx as _nx
-            _raw = _json.loads(gp.read_text(encoding="utf-8"))
-            try:
-                G = json_graph.node_link_graph(_raw, edges="links")
-            except TypeError:
-                G = json_graph.node_link_graph(_raw)
+            G = load_graph_nx(gp)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
         except Exception as exc:
             print(f"error: could not load graph: {exc}", file=sys.stderr)
             sys.exit(1)
-        terms = [t.lower() for t in question.split() if len(t) > 2]
-        scored = _score_nodes(G, terms)
-        if not scored:
-            print("No matching nodes found.")
-            sys.exit(0)
-        start = [nid for _, nid in scored[:5]]
-        nodes, edges = (_dfs if use_dfs else _bfs)(G, start, depth=2)
-        print(_subgraph_to_text(G, nodes, edges, token_budget=budget))
+        print(run_graph_query(G, question, "dfs" if use_dfs else "bfs", depth, budget))
     elif cmd == "save-result":
         # graphify save-result --question Q --answer A --type T [--nodes N1 N2 ...]
         import argparse as _ap
@@ -1241,9 +1243,8 @@ def main() -> None:
         if len(sys.argv) < 4:
             print("Usage: graphify path \"<source>\" \"<target>\" [--graph path]", file=sys.stderr)
             sys.exit(1)
-        from .serve import _score_nodes
-        from networkx.readwrite import json_graph
-        import networkx as _nx
+        from .runtime_dispatch import load_graph_nx, run_shortest_path
+
         source_label = sys.argv[2]
         target_label = sys.argv[3]
         graph_path = "graphify-out/graph.json"
@@ -1252,47 +1253,23 @@ def main() -> None:
             if a == "--graph" and i + 1 < len(args):
                 graph_path = args[i + 1]
         gp = Path(graph_path).resolve()
-        if not gp.exists():
-            print(f"error: graph file not found: {gp}", file=sys.stderr)
-            sys.exit(1)
-        _raw = json.loads(gp.read_text(encoding="utf-8"))
         try:
-            G = json_graph.node_link_graph(_raw, edges="links")
-        except TypeError:
-            G = json_graph.node_link_graph(_raw)
-        src_scored = _score_nodes(G, [t.lower() for t in source_label.split()])
-        tgt_scored = _score_nodes(G, [t.lower() for t in target_label.split()])
-        if not src_scored:
-            print(f"No node matching '{source_label}' found.", file=sys.stderr)
+            G = load_graph_nx(gp)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
-        if not tgt_scored:
-            print(f"No node matching '{target_label}' found.", file=sys.stderr)
+        out = run_shortest_path(G, source_label, target_label, max_hops=64)
+        if out.startswith("No node matching"):
+            print(out, file=sys.stderr)
             sys.exit(1)
-        src_nid, tgt_nid = src_scored[0][1], tgt_scored[0][1]
-        try:
-            path_nodes = _nx.shortest_path(G, src_nid, tgt_nid)
-        except (_nx.NetworkXNoPath, _nx.NodeNotFound):
-            print(f"No path found between '{source_label}' and '{target_label}'.")
-            sys.exit(0)
-        hops = len(path_nodes) - 1
-        segments = []
-        for i in range(len(path_nodes) - 1):
-            u, v = path_nodes[i], path_nodes[i + 1]
-            edata = G.edges[u, v]
-            rel = edata.get("relation", "")
-            conf = edata.get("confidence", "")
-            conf_str = f" [{conf}]" if conf else ""
-            if i == 0:
-                segments.append(G.nodes[u].get("label", u))
-            segments.append(f"--{rel}{conf_str}--> {G.nodes[v].get('label', v)}")
-        print(f"Shortest path ({hops} hops):\n  " + " ".join(segments))
+        print(out)
 
     elif cmd == "explain":
         if len(sys.argv) < 3:
             print("Usage: graphify explain \"<node>\" [--graph path]", file=sys.stderr)
             sys.exit(1)
-        from .serve import _find_node
-        from networkx.readwrite import json_graph
+        from .runtime_dispatch import load_graph_nx, run_explain
+
         label = sys.argv[2]
         graph_path = "graphify-out/graph.json"
         args = sys.argv[3:]
@@ -1300,36 +1277,12 @@ def main() -> None:
             if a == "--graph" and i + 1 < len(args):
                 graph_path = args[i + 1]
         gp = Path(graph_path).resolve()
-        if not gp.exists():
-            print(f"error: graph file not found: {gp}", file=sys.stderr)
-            sys.exit(1)
-        _raw = json.loads(gp.read_text(encoding="utf-8"))
         try:
-            G = json_graph.node_link_graph(_raw, edges="links")
-        except TypeError:
-            G = json_graph.node_link_graph(_raw)
-        matches = _find_node(G, label)
-        if not matches:
-            print(f"No node matching '{label}' found.")
-            sys.exit(0)
-        nid = matches[0]
-        d = G.nodes[nid]
-        print(f"Node: {d.get('label', nid)}")
-        print(f"  ID:        {nid}")
-        print(f"  Source:    {d.get('source_file', '')} {d.get('source_location', '')}".rstrip())
-        print(f"  Type:      {d.get('file_type', '')}")
-        print(f"  Community: {d.get('community', '')}")
-        print(f"  Degree:    {G.degree(nid)}")
-        neighbors = list(G.neighbors(nid))
-        if neighbors:
-            print(f"\nConnections ({len(neighbors)}):")
-            for nb in sorted(neighbors, key=lambda n: G.degree(n), reverse=True)[:20]:
-                edata = G.edges[nid, nb]
-                rel = edata.get("relation", "")
-                conf = edata.get("confidence", "")
-                print(f"  --> {G.nodes[nb].get('label', nb)} [{rel}] [{conf}]")
-            if len(neighbors) > 20:
-                print(f"  ... and {len(neighbors) - 20} more")
+            G = load_graph_nx(gp)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(run_explain(G, label))
 
     elif cmd == "add":
         if len(sys.argv) < 3:

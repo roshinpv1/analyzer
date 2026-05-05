@@ -24,6 +24,9 @@ class TestAgentManager:
             "api_key": "test-key",
             "base_url": "https://api.openai.com/v1",
         }
+        config_manager.get_max_specialist_reviews.return_value = 3
+        config_manager.get_skip_graphify_index.return_value = False
+        config_manager.get_first_review_min_confidence.return_value = 0.85
         return config_manager
 
     @pytest.fixture
@@ -37,6 +40,8 @@ class TestAgentManager:
 
         assert manager.config_manager == mock_config_manager
         assert manager.max_specialist_reviews == 3
+        assert manager.skip_graphify_index is False
+        assert manager.first_review_min_confidence == 0.85
         assert manager.code_analyzer is None
         assert manager.task_specialist is None
 

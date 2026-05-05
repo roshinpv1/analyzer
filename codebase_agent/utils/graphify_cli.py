@@ -42,8 +42,11 @@ class GraphifyCLI:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         command = [
-            sys.executable, "-m", "codebase_agent.graphify",
-            "update", str(self.codebase_path)
+            sys.executable,
+            "-m",
+            "codebase_agent.graphify",
+            "update",
+            str(self.codebase_path),
         ]
         
         try:
@@ -72,8 +75,11 @@ class GraphifyCLI:
             
         logger.info("Updating graphify index...")
         command = [
-            "python3", "-m", "codebase_agent.graphify",
-            "update", str(self.codebase_path)
+            sys.executable,
+            "-m",
+            "codebase_agent.graphify",
+            "update",
+            str(self.codebase_path),
         ]
         
         try:

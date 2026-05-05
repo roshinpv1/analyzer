@@ -50,7 +50,7 @@ class ConfigurationManager:
     # Optional environment variables with defaults
     OPTIONAL_KEYS = {
         "MODEL_TEMPERATURE": "0.1",
-        "MAX_TOKENS": "4000",
+        "LLM_MAX_TOKENS": "4000",
         "REQUEST_TIMEOUT": "60",
         "AGENT_TIMEOUT": "300",
         "MAX_SHELL_OUTPUT_SIZE": "10000",
@@ -62,6 +62,13 @@ class ConfigurationManager:
         "MODEL_FUNCTION_CALLING": "true",
         "MODEL_JSON_OUTPUT": "true",
         "MODEL_STRUCTURED_OUTPUT": "false",
+        "MEMORY_BACKEND": "sqlite",
+        # Max analyzer/specialist review rounds (forced accept on the last round)
+        "MAX_SPECIALIST_REVIEWS": "3",
+        # Skip Graphify indexing on analyze (true/1/on) for faster cold starts
+        "SKIP_GRAPHIFY_INDEX": "",
+        # Min confidence on first specialist review to accept (0.5–0.99, default 0.85)
+        "FIRST_REVIEW_MIN_CONFIDENCE": "0.85",
     }
 
     # Default values for common API providers
@@ -127,7 +134,9 @@ class ConfigurationManager:
         try:
             # Load from .env file if it exists
             if self.env_file.exists():
-                success = load_dotenv(self.env_file)
+                # Force .env values to override existing process env vars so
+                # LOCAL_LLM_MODEL / provider settings are consistently honored.
+                success = load_dotenv(self.env_file, override=True)
                 if not success:
                     logger.warning(f"Failed to load .env file from {self.env_file}")
                 else:
@@ -170,10 +179,12 @@ class ConfigurationManager:
         # Validate numeric values
         for key in [
             "MODEL_TEMPERATURE",
-            "MAX_TOKENS",
+            "LLM_MAX_TOKENS",
             "REQUEST_TIMEOUT",
             "AGENT_TIMEOUT",
             "MAX_SHELL_OUTPUT_SIZE",
+            "MAX_SPECIALIST_REVIEWS",
+            "FIRST_REVIEW_MIN_CONFIDENCE",
         ]:
             value = self._config.get(key)
             if value and not self._is_valid_numeric(value):
@@ -195,7 +206,7 @@ class ConfigurationManager:
         from ..llm.providers import get_llm_client, AutoGenLLMWrapper
         
         # Instantiate the custom LLM driver (Local or Apigee)
-        llm_driver = get_llm_client()
+        llm_driver = get_llm_client(config_overrides=self._config)
         
         # Wrap it in the AutoGen ChatCompletionClient interface
         return AutoGenLLMWrapper(driver=llm_driver)
@@ -216,6 +227,46 @@ class ConfigurationManager:
             "structured_output": False,
         }
 
+    def get_max_specialist_reviews(self) -> int:
+        """Return bounded MAX_SPECIALIST_REVIEWS from environment (default 3, max 50)."""
+        if not self._is_loaded:
+            self.load_environment()
+
+        raw = (self._config.get("MAX_SPECIALIST_REVIEWS") or "3").strip()
+        try:
+            n = int(raw, 10)
+        except ValueError:
+            logger.warning("Invalid MAX_SPECIALIST_REVIEWS %r; using 3.", raw)
+            return 3
+        if n < 1:
+            logger.warning("MAX_SPECIALIST_REVIEWS %s is below 1; using 1.", n)
+            return 1
+        if n > 50:
+            logger.warning("MAX_SPECIALIST_REVIEWS %s exceeds 50; capping at 50.", n)
+            return 50
+        return n
+
+    def get_skip_graphify_index(self) -> bool:
+        """If True, do not run Graphify indexing during analyze (env SKIP_GRAPHIFY_INDEX)."""
+        if not self._is_loaded:
+            self.load_environment()
+
+        raw = (self._config.get("SKIP_GRAPHIFY_INDEX") or "").strip().lower()
+        return raw in ("1", "true", "yes", "on")
+
+    def get_first_review_min_confidence(self) -> float:
+        """Minimum LLM confidence to accept analysis on review round 1 (default 0.85)."""
+        if not self._is_loaded:
+            self.load_environment()
+
+        raw = (self.get_config_value("FIRST_REVIEW_MIN_CONFIDENCE", "0.85") or "0.85").strip()
+        try:
+            v = float(raw)
+        except ValueError:
+            logger.warning("Invalid FIRST_REVIEW_MIN_CONFIDENCE %r; using 0.85.", raw)
+            return 0.85
+        return max(0.5, min(0.99, v))
+
     def get_agent_config(self) -> dict[str, Any]:
         """Get agent-specific configuration settings.
 
@@ -230,6 +281,9 @@ class ConfigurationManager:
             "max_shell_output_size": int(
                 self._config.get("MAX_SHELL_OUTPUT_SIZE", "10000")
             ),
+            "max_specialist_reviews": self.get_max_specialist_reviews(),
+            "skip_graphify_index": self.get_skip_graphify_index(),
+            "first_review_min_confidence": self.get_first_review_min_confidence(),
             "debug": self._config.get("DEBUG", "false").lower() == "true",
             "allowed_working_directory": self._config.get(
                 "ALLOWED_WORKING_DIRECTORY", ""

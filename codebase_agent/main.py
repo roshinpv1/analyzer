@@ -15,7 +15,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from .agents.manager import AgentManager
+from .agents.code_analyzer import iteration_cap_for_depth_profile
+from .agents.manager import AgentManager, resolve_analysis_depth_profile
 from .config.configuration import ConfigurationError, ConfigurationManager
 from .utils.logging import setup_logging
 
@@ -90,12 +91,19 @@ def cli(log_level: str, console_level: str, logs_dir: str, verbose: bool) -> Non
     default=None,
     help="Comma-separated names of playbooks to run sequentially (e.g., 'system_architecture_diagram,security_vulnerability_scan')",
 )
+@click.option(
+    "--depth-profile",
+    default="auto",
+    type=click.Choice(["auto", "quick", "standard", "deep", "forensic"]),
+    help="Analysis depth profile (default: auto, inferred from user intent)",
+)
 def analyze(
     codebase_path: str,
     task_description: str,
     output_format: str,
     working_dir: str | None,
     playbooks: str | None,
+    depth_profile: str,
 ) -> None:
     """Analyze codebase for specific development task.
 
@@ -147,10 +155,19 @@ def analyze(
         # Initialize agent manager
         with console.status("[bold green]Initializing AI agents..."):
             agent_manager = AgentManager(config_manager)
-            agent_manager.initialize_agents()
+            agent_manager.initialize_agents(str(working_directory))
 
         # Perform analysis with progress indication
+        resolved_depth = resolve_analysis_depth_profile(task_description, depth_profile)
+        q_cap = iteration_cap_for_depth_profile("quick")
+        s_cap = iteration_cap_for_depth_profile(resolved_depth)
         console.print("\n[bold green]Starting codebase analysis...[/bold green]")
+        console.print(
+            f"[dim]Depth: [bold]{resolved_depth}[/bold] (up to ~{s_cap} analyzer LLM steps "
+            f"per review round; milestones + synthesis add more calls). "
+            f"[bold]quick[/bold] ≈ {q_cap} steps. Logs: INFO in [cyan]logs/[/cyan]; "
+            f"use [bold]-v[/bold] for console progress.[/dim]"
+        )
 
         with Progress(
             SpinnerColumn(),
@@ -165,7 +182,10 @@ def analyze(
 
             # Execute the analysis
             result, statistics = agent_manager.process_query_with_review_cycle(
-                task_description, str(working_directory), playbook_names=playbooks_list
+                task_description,
+                str(working_directory),
+                playbook_names=playbooks_list,
+                depth_profile=depth_profile,
             )
 
             progress.update(task, description="Analysis complete!")
@@ -201,6 +221,7 @@ def analyze(
 
             # Display execution statistics
             stats_text = (
+                f"Session ID: [bold cyan]{statistics.get('session_id', 'N/A')}[/bold cyan]\n"
                 f"Total Review Cycles: {statistics.get('total_review_cycles', 0)}\n"
                 f"Rejections: {statistics.get('rejections', 0)}\n"
                 f"Final Result: {statistics.get('final_acceptance_type', 'Unknown')}\n"

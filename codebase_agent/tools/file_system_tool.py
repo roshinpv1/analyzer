@@ -26,19 +26,35 @@ class FileSystemTool:
         self.usage_stats[action] = self.usage_stats.get(action, 0) + 1
         try:
             if action == "list_directory":
-                return True, self.list_directory(arguments.get("path", ".")), ""
+                res = self.list_directory(arguments.get("path", "."))
+                success = not res.startswith("Path does not exist") and not "is a file" in res
+                return success, res, "" if success else res
             elif action == "read_file":
                 start_line = arguments.get("start_line", 1)
                 max_lines = arguments.get("max_lines", 300)
-                return True, self.read_file(arguments.get("path", ""), start_line, max_lines), ""
+                res = self.read_file(arguments.get("path", ""), start_line, max_lines)
+                success = not res.startswith("File does not exist") and not "Binary file" in res and not "Error decoding" in res
+                return success, res, "" if success else res
             elif action == "search_content":
-                return True, self.search_content(arguments.get("query", ""), arguments.get("path", ".")), ""
+                res = self.search_content(arguments.get("search_query") or arguments.get("query", ""), arguments.get("path", "."))
+                success = not res.startswith("Path does not exist") and not res.startswith("Invalid regex")
+                return success, res, "" if success else res
+            elif action == "write_file":
+                res = self.write_file(arguments.get("path", ""), arguments.get("content", ""))
+                success = not res.startswith("Failed to write") and not "denied" in res
+                return success, res, "" if success else res
+            elif action == "append_file":
+                res = self.append_file(arguments.get("path", ""), arguments.get("content", ""))
+                success = not res.startswith("Failed to append") and not "denied" in res
+                return success, res, "" if success else res
             elif action == "fuzzy_search":
-                return True, self.fuzzy_search(
-                    arguments.get("query", ""), 
+                res = self.fuzzy_search(
+                    arguments.get("search_query") or arguments.get("query", ""), 
                     arguments.get("algorithm", "bm25"), 
                     arguments.get("top_k", 5)
-                ), ""
+                )
+                success = not res.startswith("No results found") and not "error" in res.lower()
+                return success, res, "" if success else res
             else:
                 return False, "", f"Unknown action: {action}"
         except Exception as e:
@@ -107,9 +123,49 @@ class FileSystemTool:
         except Exception as e:
             return f"Failed to read {path}: {e}"
 
-    def search_content(self, query: str, path: str) -> str:
+    def write_file(self, path: str, content: str) -> str:
+        """Write text content to a file natively (safely restricted to workspace)."""
+        if not path:
+            return "Path cannot be empty"
+        try:
+            target = self._resolve_safe_path(path)
+            
+            # Ensure parent directories exist
+            target.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(target, 'w', encoding='utf-8') as f:
+                f.write(content)
+                
+            return f"Successfully wrote {len(content)} characters to {path}"
+            
+        except PermissionError as e:
+            return str(e)
+        except Exception as e:
+            return f"Failed to write to {path}: {e}"
+
+    def append_file(self, path: str, content: str) -> str:
+        """Append text content to a file natively (safely restricted to workspace)."""
+        if not path:
+            return "Path cannot be empty"
+        try:
+            target = self._resolve_safe_path(path)
+            
+            # Ensure parent directories exist
+            target.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(target, 'a', encoding='utf-8') as f:
+                f.write(content)
+                
+            return f"Successfully appended {len(content)} characters to {path}"
+            
+        except PermissionError as e:
+            return str(e)
+        except Exception as e:
+            return f"Failed to append to {path}: {e}"
+
+    def search_content(self, search_query: str, path: str) -> str:
         """Search contents using Python regex."""
-        if not query:
+        if not search_query:
             return "Query cannot be empty"
         
         try:
@@ -118,7 +174,7 @@ class FileSystemTool:
                 return f"Path does not exist: {path}"
             
             output = []
-            regex = re.compile(query, re.IGNORECASE)
+            regex = re.compile(search_query, re.IGNORECASE)
             
             if target.is_file():
                 self._search_single_file(target, regex, output, target)
@@ -142,7 +198,7 @@ class FileSystemTool:
             return res or "No matches found."
             
         except re.error as e:
-            return f"Invalid regex query '{query}': {e}"
+            return f"Invalid regex query '{search_query}': {e}"
         except Exception as e:
             return f"Search error: {e}"
             
@@ -156,9 +212,9 @@ class FileSystemTool:
         except (UnicodeDecodeError, PermissionError):
             pass # Skip binaries and unreadable files
 
-    def fuzzy_search(self, query: str, algorithm: str = "bm25", top_k: int = 5) -> str:
+    def fuzzy_search(self, search_query: str, algorithm: str = "bm25", top_k: int = 5) -> str:
         """Perform semantic fuzzy matching across the codebase (BM25 or TF-IDF)."""
-        if not query:
+        if not search_query:
             return "Query cannot be empty"
             
         try:
@@ -166,12 +222,12 @@ class FileSystemTool:
                 from .search_engines import CodebaseSearcher
                 self._searcher = CodebaseSearcher(self.working_directory)
                 
-            results = self._searcher.search(query, algorithm=algorithm, top_k=top_k)
+            results = self._searcher.search(search_query, algorithm=algorithm, top_k=top_k)
             
             if not results:
-                return f"No results found for '{query}' using {algorithm}."
+                return f"No results found for '{search_query}' using {algorithm}."
                 
-            output = [f"Top {len(results)} matches for '{query}' ({algorithm}):\n"]
+            output = [f"Top {len(results)} matches for '{search_query}' ({algorithm}):\n"]
             for filepath, score, snippet in results:
                 output.append(f"--- File: {filepath} (Score: {score:.2f}) ---")
                 output.append(snippet)

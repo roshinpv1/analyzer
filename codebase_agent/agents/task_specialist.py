@@ -11,7 +11,10 @@ import re
 
 from autogen_agentchat.agents import AssistantAgent
 
-from ..utils.autogen_utils import extract_text_from_autogen_response
+from ..utils.autogen_utils import (
+    extract_text_from_autogen_response,
+    run_assistant_single_turn,
+)
 
 
 class TaskSpecialist:
@@ -25,19 +28,35 @@ class TaskSpecialist:
     codebase investigation.
     """
 
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        playbook_instructions: str | None = None,
+        structured_logger=None,
+        max_reviews: int = 3,
+        first_review_min_confidence: float = 0.85,
+    ):
         """
         Initialize the Task Specialist agent.
 
         Args:
             config: Configuration dict containing model settings
+            playbook_instructions: Optional strategic instructions from a playbook
+            structured_logger: Optional logger for session-level audit trails
+            max_reviews: Review rounds before forced acceptance (must match manager cap)
+            first_review_min_confidence: Min confidence on round 1 to accept without rework
         """
         self.config = config
+        self.playbook_instructions = playbook_instructions
+        self.structured_logger = structured_logger
         self.logger = logging.getLogger(__name__)
 
-        # Review tracking
+        # Review tracking (aligned with AgentManager.MAX_SPECIALIST_REVIEWS / env)
         self.review_count = 0
-        self.max_reviews = 50
+        self.max_reviews = max(1, int(max_reviews))
+        self.first_review_min_confidence = float(
+            max(0.5, min(0.99, first_review_min_confidence))
+        )
 
         # Initialize AutoGen agent
         self._agent = self._create_autogen_agent()
@@ -49,67 +68,47 @@ class TaskSpecialist:
         agent = AssistantAgent(
             name="task_specialist",
             system_message=system_message,
-            model_client=self.config,  # Updated for new API
+            model_client=self.config,
         )
 
         return agent
 
     def _get_system_message(self) -> str:
         """Get the system message for the Task Specialist agent."""
-        return """You are a Task Specialist - a RUTHLESS TECH LEAD who absolutely DESPISES superficial reports and marketing fluff.
+        base_message = """You are a Task Specialist - a RUTHLESS TECHNICAL AUDITOR who ensures codebase analysis is deep, accurate, and actionable. Your job is to reject superficial reports and demand engineering-grade evidence.
 
-You are receiving this analysis report and you need to execute the requested task. You have ZERO TOLERANCE for impressive-sounding but technically empty analysis.
+### 🧠 AUDIT PHILOSOPHY
+- **No Fluff**: Reject meaningless buzzwords like "sophisticated", "excellent", or "comprehensive" unless backed by SPECIFIC code examples and implementation details.
+- **Evidence-First**: If a report claims a feature exists, it must specify the EXACT files and logic patterns that implement it.
+- **Actionability**: Ask yourself: "Can an engineer start coding based on this report ALONE?" If the answer is no, REJECT.
 
-RUTHLESS EVALUATION MINDSET:
-You are DISGUSTED by reports that say things like:
-- "sophisticated multi-agent system" - MEANINGLESS BUZZWORD
-- "excellent software engineering practices" - WHAT PRACTICES? BE SPECIFIC!
-- "comprehensive testing" - SHOW ME THE TEST STRUCTURE!
-- "clear separation of concerns" - WHAT ARE THE ACTUAL RESPONSIBILITIES?
-- "modern Python tooling" - EVERYONE USES MODERN TOOLING, SO WHAT?
+### 🎯 EVALUATION CRITERIA
+1. **Technical Precision**: Does the report identify exact method signatures, class structures, and integration patterns?
+2. **Data Flow Awareness**: Does it explain how information moves through the system, not just what files exist?
+3. **Logic Validation**: Has the analyzer actually read the logic, or is it just listing imports and filenames?
+4. **Boundary conditions**: Are error handling, configuration defaults, and edge cases addressed?
 
-YOU DEMAND BRUTAL TECHNICAL HONESTY:
-- Don't tell me it's "sophisticated" - tell me the EXACT interaction patterns
-- Don't say "comprehensive" - show me SPECIFIC test categories and coverage
-- Don't claim "excellent practices" - demonstrate with CONCRETE examples
-- Don't list technologies - explain HOW they're integrated and WHY
+### 🛑 REJECTION PROTOCOL
+- Reject if the report is just a summary of file paths.
+- Reject if the analysis relies on "hallucinated" assumptions without `read_file` evidence.
+- Reject if the report fails to address the specific objectives of the current playbook.
 
-MANDATORY TECHNICAL DEPTH REQUIREMENTS:
-✓ Specific class names, method signatures, and their exact responsibilities
-✓ Actual data flow with concrete examples of data transformations
-✓ Error handling mechanisms with specific exception types and recovery patterns
-✓ Performance bottlenecks and optimization strategies implemented
-✓ Configuration patterns with actual parameter examples
-✓ Integration points with precise API usage patterns
-✓ Testing strategies with specific test types and validation approaches
+### 📋 RESPONSE FORMAT
+You MUST respond with a single JSON object:
+```json
+{
+    "is_complete": true/false,
+    "feedback": "Specific, actionable technical guidance for the analyzer...",
+    "confidence": 0.0 to 1.0
+}
+```
+"""
 
-AUTOMATIC REJECTION TRIGGERS:
-- ANY use of "sophisticated", "comprehensive", "excellent", "modern" without concrete backing
-- Component lists without explaining EXACT interfaces and responsibilities
-- Technology mentions without integration implementation details
-- Abstract architectural descriptions without concrete code patterns
-- Claims about "best practices" without showing specific implementation
-- Line counts or file sizes as evidence of anything meaningful
+        if self.playbook_instructions:
+            base_message += f"\n\n🚀 STRATEGIC PLAYBOOK GUIDANCE:\n{self.playbook_instructions}\n"
+            base_message += "\nIMPORTANT: The above playbook provides the SPECIFIC AUDIT CRITERIA for this task. Enforce these requirements strictly while maintaining your high technical standards.\n"
 
-CONFIDENCE SCORING (CRITICAL):
-- 0.9-1.0: Ready for immediate implementation with complete technical details
-- 0.8-0.89: Good technical depth but missing some implementation specifics
-- 0.7-0.79: Adequate overview but needs significant additional investigation
-- 0.6-0.69: Insufficient technical detail for confident implementation
-- Below 0.6: Completely inadequate, needs major rework
-
-REJECTION EXAMPLES OF UNACCEPTABLE FLUFF:
-- "The system uses AutoGen framework" → REJECT: HOW is it integrated? What specific APIs?
-- "Has three main components" → REJECT: What do they DO exactly? How do they communicate?
-- "Comprehensive testing setup" → REJECT: What test types? Mock strategies? Coverage targets?
-- "Configuration supports multiple providers" → REJECT: What's the switching mechanism? How are credentials handled?
-
-DECISION STANDARD:
-Ask yourself: "If I were doing a code review, would I approve this level of technical detail, or would I write a scathing comment demanding actual implementation specifics?"
-
-ONLY ACCEPT WITH HIGH CONFIDENCE (0.8+) if the report contains enough implementation details that you could start coding immediately without asking follow-up questions.
-
-REJECT EVERYTHING ELSE as worthless architectural tourism that wastes engineering time."""
+        return base_message
 
     def review_analysis(
         self, analysis_report: str, task_description: str, current_review_count: int
@@ -137,13 +136,13 @@ REJECT EVERYTHING ELSE as worthless architectural tourism that wastes engineerin
         # Force accept if maximum reviews reached with stricter confidence penalty
         if self.review_count >= self.max_reviews:
             self.logger.warning(
-                "Maximum reviews reached - forcing acceptance with low confidence"
+                "Maximum reviews reached - returning explicit rejection"
             )
             return (
-                True,
-                "Analysis accepted (maximum review limit reached - quality may be insufficient)",
+                False,
+                "Maximum review limit reached without sufficient quality evidence.",
                 0.5,
-            )  # Lower confidence score for forced acceptance
+            )
 
         # Primary path: Ask the LLM to perform the review with a structured prompt
         try:
@@ -151,17 +150,7 @@ REJECT EVERYTHING ELSE as worthless architectural tourism that wastes engineerin
                 task_description, analysis_report, self.review_count
             )
 
-            # Use agent.run() method directly like in the integration test
-            def run_review():
-                import asyncio
-
-                async def async_review():
-                    result = await self._agent.run(task=review_prompt)
-                    return result
-
-                return asyncio.run(async_review())
-
-            llm_response = run_review()
+            llm_response = run_assistant_single_turn(self._agent, review_prompt)
             is_complete, feedback, confidence = self._parse_llm_review_response(
                 llm_response
             )
@@ -171,11 +160,11 @@ REJECT EVERYTHING ELSE as worthless architectural tourism that wastes engineerin
                 # Apply stricter confidence threshold for acceptance
                 min_confidence_for_acceptance = 0.80
 
-                # First review should be extra strict - always ask for improvements
                 if self.review_count == 1:
-                    min_confidence_for_acceptance = 0.90
+                    min_confidence_for_acceptance = self.first_review_min_confidence
                     self.logger.info(
-                        "First review - applying extra strict confidence threshold (0.90)"
+                        "First review - applying confidence threshold (%.2f)",
+                        min_confidence_for_acceptance,
                     )
 
                 if is_complete and confidence < min_confidence_for_acceptance:
@@ -243,6 +232,8 @@ CONFIDENCE SCORING:
 - Below 0.7: Inadequate - requires major additional analysis
 
 FEEDBACK RULES:
+- **LOOP DETECTION**: If you see the agent repeating the same tool calls (files or graph) or failing to progress for 2+ cycles, EXPLICITLY tell it to stop searching and synthesize a best-effort answer with the data it has.
+- **GRAPH SPAM**: If the analyzer is calling graph tools with the same questions multiple times, REJECT and instruct it to use `list_directory` or `read_file` instead.
 - For REJECTIONS: Provide specific file system operations (search_content, fuzzy_search, read_file) or graph queries to fill gaps. Do NOT suggest bash/shell commands like grep or find.
 - For ACCEPTANCE: Briefly confirm what makes it ready for implementation
 

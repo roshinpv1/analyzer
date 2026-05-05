@@ -5,6 +5,7 @@ import uuid
 import datetime
 import base64
 import re
+import logging
 from abc import ABC, abstractmethod
 from enum import Enum
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from autogen_core.models import (
     AssistantMessage,
     RequestUsage,
 )
+
+logger = logging.getLogger(__name__)
 
 class LLMProvider(Enum):
     LOCAL = "local"
@@ -161,6 +164,15 @@ class LocalDriver(LLMDriver):
             )
             response.raise_for_status()
             data = response.json()
+            actual_model = data.get("model", "")
+            configured_model = self.config.model
+            if actual_model and configured_model and actual_model != configured_model:
+                logger.warning(
+                    "Local LLM model mismatch: requested='%s', served='%s'. "
+                    "Your local server may be falling back to a loaded default model.",
+                    configured_model,
+                    actual_model,
+                )
             msg = _safe_extract_message(data)
             output = msg.get("content") or ""
             
@@ -200,8 +212,8 @@ class ApigeeDriver(LLMDriver):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        apigee_max_output = int(os.environ.get("APIGEE_MAX_OUTPUT_TOKENS", "8192"))
-        max_tokens = min(kwargs.get("max_tokens", self.config.max_tokens), apigee_max_output)
+        # Use the unified max_tokens from config
+        max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
 
         headers = {
             "x-wf-request-date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -239,31 +251,42 @@ class ApigeeDriver(LLMDriver):
 
 # --- Factory ---
 
-def get_llm_client() -> LLMDriver:
-    provider_env = os.environ.get("LLM_PROVIDER", "local").lower()
+def get_llm_client(config_overrides: Optional[Dict[str, str]] = None) -> LLMDriver:
+    cfg = config_overrides or os.environ
+    provider_env = cfg.get("LLM_PROVIDER", "local").lower()
     
-    max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "4096"))
-    temperature = float(os.environ.get("LLM_TEMPERATURE", "0.1"))
+    max_tokens = int(cfg.get("LLM_MAX_TOKENS", "10000"))
+    temperature = float(cfg.get("LLM_TEMPERATURE", "0.1"))
     
     if provider_env == "apigee":
         config = LLMConfig(
             provider=LLMProvider.APIGEE,
-            model=os.environ.get("APIGEE_MODEL", "gpt-4"),
-            base_url=os.environ.get("ENTERPRISE_BASE_URL"),
-            timeout=float(os.environ.get("APIGEE_TIMEOUT", "600")),
-            temperature=float(os.environ.get("APIGEE_TEMPERATURE", str(temperature))),
+            model=cfg.get("APIGEE_MODEL", "gpt-4"),
+            base_url=cfg.get("ENTERPRISE_BASE_URL"),
+            timeout=float(cfg.get("APIGEE_TIMEOUT", "600")),
+            temperature=float(cfg.get("APIGEE_TEMPERATURE", str(temperature))),
             max_tokens=max_tokens
+        )
+        logger.info(
+            "Using APIGEE provider with model='%s' base_url='%s'",
+            config.model,
+            config.base_url,
         )
         return ApigeeDriver(config)
     
     # Default to Local
     config = LLMConfig(
         provider=LLMProvider.LOCAL,
-        model=os.environ.get("LOCAL_LLM_MODEL", "openai/gpt-oss-20b"),
-        base_url=os.environ.get("LOCAL_LLM_URL", "http://localhost:1234/v1"),
-        api_key=os.environ.get("LOCAL_LLM_API_KEY", "not-needed"),
+        model=cfg.get("LOCAL_LLM_MODEL", "openai/gpt-oss-20b"),
+        base_url=cfg.get("LOCAL_LLM_URL", "http://localhost:1234/v1"),
+        api_key=cfg.get("LOCAL_LLM_API_KEY", "not-needed"),
         temperature=temperature,
         max_tokens=max_tokens
+    )
+    logger.info(
+        "Using LOCAL provider with model='%s' base_url='%s'",
+        config.model,
+        config.base_url,
     )
     return LocalDriver(config)
 

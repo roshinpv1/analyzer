@@ -2,6 +2,11 @@
 Utility functions for handling AutoGen responses and common operations.
 """
 
+import asyncio
+import inspect
+
+from autogen_core import CancellationToken
+
 
 def extract_text_from_autogen_response(response) -> str:
     """
@@ -42,3 +47,25 @@ def extract_text_from_autogen_response(response) -> str:
 
     # Fallback to string conversion
     return str(response)
+
+
+def run_assistant_single_turn(agent, task: str):
+    """
+    Run one AssistantAgent task after clearing accumulated chat context.
+
+    AutoGen's AssistantAgent stores prior user/assistant messages in ``model_context``
+    across ``run()`` calls. This analyzer passes prior tool output inside each new
+    prompt, so letting history accumulate duplicates content and exhausts context
+    windows.
+
+    Returns:
+        TaskResult from ``agent.run``.
+    """
+
+    async def _once():
+        on_reset = getattr(agent, "on_reset", None)
+        if callable(on_reset) and inspect.iscoroutinefunction(on_reset):
+            await on_reset(CancellationToken())
+        return await agent.run(task=task)
+
+    return asyncio.run(_once())

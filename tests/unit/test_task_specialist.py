@@ -56,11 +56,11 @@ class TestTaskSpecialist:
     def test_system_message_content(self, task_specialist):
         system_message = task_specialist._get_system_message()
         assert "Task Specialist" in system_message
-        assert "RUTHLESS TECH LEAD" in system_message
-        assert "DESPISES superficial reports" in system_message
-        assert "TECHNICAL DEPTH REQUIREMENTS" in system_message
-        assert "class names, method signatures" in system_message
-        assert "AUTOMATIC REJECTION TRIGGERS" in system_message
+        assert "RUTHLESS TECHNICAL AUDITOR" in system_message
+        assert "Evidence-First" in system_message
+        assert "EVALUATION CRITERIA" in system_message
+        assert "method signatures" in system_message
+        assert "REJECTION PROTOCOL" in system_message
         assert (
             "sophisticated" in system_message
         )  # Should be mentioned as rejection trigger

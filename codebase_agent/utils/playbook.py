@@ -110,12 +110,8 @@ class PlaybookManager:
         if playbooks_dir:
             self.playbooks_dir = Path(playbooks_dir)
         else:
-            # Default to repo_root/codebase_agent/playbooks
-            try:
-                import codebase_agent
-                self.playbooks_dir = Path(codebase_agent.__file__).parent / "playbooks"
-            except ImportError:
-                self.playbooks_dir = Path("codebase_agent/playbooks")
+            # Default to repo_root/playbooks
+            self.playbooks_dir = Path("playbooks")
                 
         if not self.playbooks_dir.exists():
             logger.warning(f"Playbooks directory not found: {self.playbooks_dir}")
